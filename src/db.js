@@ -1,10 +1,12 @@
 /**
- * db.js — All Supabase queries in one place.
- * The App imports from here; swap this file to change your backend.
+ * db.js — All Supabase queries.
+ * Every write is awaited and errors are surfaced.
  */
 import { supabase } from './supabase.js'
 
 // ─── Playlist ──────────────────────────────────────────────────────────────
+// The playlist table always has exactly ONE row with id = 'main'.
+// We store: tracks (jsonb array), version (int), new_track_ids (jsonb array of id strings)
 
 export async function getPlaylist() {
   const { data, error } = await supabase
@@ -12,15 +14,26 @@ export async function getPlaylist() {
     .select('*')
     .eq('id', 'main')
     .maybeSingle()
-  if (error) console.error('getPlaylist:', error)
-  return data // { id, tracks, version, updated_at } or null
+  if (error) { console.error('getPlaylist error:', error.message); return null }
+  return data
 }
 
-export async function savePlaylist(tracks, version) {
+export async function savePlaylist(tracks, version, newTrackIds = []) {
+  // Use upsert so it works whether the row exists or not.
+  // ignoreDuplicates: false means it WILL update on conflict.
   const { error } = await supabase
     .from('playlist')
-    .upsert({ id: 'main', tracks, version, updated_at: new Date().toISOString() })
-  if (error) console.error('savePlaylist:', error)
+    .upsert(
+      {
+        id: 'main',
+        tracks,
+        version,
+        new_track_ids: newTrackIds,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'id' }
+    )
+  if (error) { console.error('savePlaylist error:', error.message); throw error }
 }
 
 // ─── Ratings ───────────────────────────────────────────────────────────────
@@ -29,8 +42,8 @@ export async function getAllRatings() {
   const { data, error } = await supabase
     .from('ratings')
     .select('transition_key, user_name, rating')
-  if (error) console.error('getAllRatings:', error)
-  // reshape: { [transition_key]: { [user_name]: rating } }
+  if (error) { console.error('getAllRatings error:', error.message); return {} }
+  // Reshape into { [transition_key]: { [user_name]: rating } }
   const map = {}
   for (const row of data || []) {
     if (!map[row.transition_key]) map[row.transition_key] = {}
@@ -43,10 +56,15 @@ export async function upsertRating(transitionKey, userName, rating) {
   const { error } = await supabase
     .from('ratings')
     .upsert(
-      { transition_key: transitionKey, user_name: userName, rating, updated_at: new Date().toISOString() },
+      {
+        transition_key: transitionKey,
+        user_name: userName,
+        rating,
+        updated_at: new Date().toISOString(),
+      },
       { onConflict: 'transition_key,user_name' }
     )
-  if (error) console.error('upsertRating:', error)
+  if (error) { console.error('upsertRating error:', error.message); throw error }
 }
 
 export async function deleteRating(transitionKey, userName) {
@@ -55,15 +73,16 @@ export async function deleteRating(transitionKey, userName) {
     .delete()
     .eq('transition_key', transitionKey)
     .eq('user_name', userName)
-  if (error) console.error('deleteRating:', error)
+  if (error) { console.error('deleteRating error:', error.message); throw error }
 }
 
 export async function deleteAllRatings() {
+  // Supabase requires a filter on delete — we use a always-true filter
   const { error } = await supabase
     .from('ratings')
     .delete()
-    .neq('id', 0) // delete all rows
-  if (error) console.error('deleteAllRatings:', error)
+    .gte('id', 0)
+  if (error) { console.error('deleteAllRatings error:', error.message); throw error }
 }
 
 // ─── Rating History ────────────────────────────────────────────────────────
@@ -72,8 +91,8 @@ export async function getRatingHistory() {
   const { data, error } = await supabase
     .from('rating_history')
     .select('*')
-  if (error) console.error('getRatingHistory:', error)
-  // reshape: { [transition_key]: { v1: {green,yellow,red,rainbow}, ... } }
+  if (error) { console.error('getRatingHistory error:', error.message); return {} }
+  // Reshape: { [transition_key]: { 'v1': {green,yellow,red,rainbow}, ... } }
   const map = {}
   for (const row of data || []) {
     if (!map[row.transition_key]) map[row.transition_key] = {}
@@ -88,11 +107,13 @@ export async function getRatingHistory() {
 }
 
 export async function saveHistorySnapshot(ratingsMap, version) {
-  // Converts current ratings into per-transition counts and upserts
   const rows = []
   for (const [key, votes] of Object.entries(ratingsMap)) {
     const c = { green: 0, yellow: 0, red: 0, rainbow: 0 }
     Object.values(votes).forEach(v => { if (c[v] !== undefined) c[v]++ })
+    // Only save if there were actual votes
+    const total = c.green + c.yellow + c.red + c.rainbow
+    if (total === 0) continue
     rows.push({
       transition_key: key,
       version,
@@ -106,7 +127,7 @@ export async function saveHistorySnapshot(ratingsMap, version) {
   const { error } = await supabase
     .from('rating_history')
     .upsert(rows, { onConflict: 'transition_key,version' })
-  if (error) console.error('saveHistorySnapshot:', error)
+  if (error) { console.error('saveHistorySnapshot error:', error.message); throw error }
 }
 
 // ─── Patch Notes ───────────────────────────────────────────────────────────
@@ -116,7 +137,7 @@ export async function getPatchNotes() {
     .from('patch_notes')
     .select('*')
     .order('created_at', { ascending: false })
-  if (error) console.error('getPatchNotes:', error)
+  if (error) { console.error('getPatchNotes error:', error.message); return [] }
   return data || []
 }
 
@@ -124,7 +145,7 @@ export async function addPatchNote(version, noteDate, notes) {
   const { error } = await supabase
     .from('patch_notes')
     .insert({ version, note_date: noteDate, notes })
-  if (error) console.error('addPatchNote:', error)
+  if (error) { console.error('addPatchNote error:', error.message); throw error }
 }
 
 export async function deletePatchNote(id) {
@@ -132,7 +153,7 @@ export async function deletePatchNote(id) {
     .from('patch_notes')
     .delete()
     .eq('id', id)
-  if (error) console.error('deletePatchNote:', error)
+  if (error) { console.error('deletePatchNote error:', error.message); throw error }
 }
 
 // ─── Roadmap ───────────────────────────────────────────────────────────────
@@ -143,16 +164,15 @@ export async function getRoadmap() {
     .select('*')
     .order('sort_order', { ascending: true })
     .order('created_at', { ascending: false })
-  if (error) console.error('getRoadmap:', error)
+  if (error) { console.error('getRoadmap error:', error.message); return [] }
   return data || []
 }
 
 export async function addRoadmapItems(items) {
-  // items: [{ text, sort_order }]
   const { error } = await supabase
     .from('roadmap')
     .insert(items)
-  if (error) console.error('addRoadmapItems:', error)
+  if (error) { console.error('addRoadmapItems error:', error.message); throw error }
 }
 
 export async function toggleRoadmapItem(id, done) {
@@ -160,7 +180,7 @@ export async function toggleRoadmapItem(id, done) {
     .from('roadmap')
     .update({ done })
     .eq('id', id)
-  if (error) console.error('toggleRoadmapItem:', error)
+  if (error) { console.error('toggleRoadmapItem error:', error.message); throw error }
 }
 
 export async function deleteRoadmapItem(id) {
@@ -168,23 +188,29 @@ export async function deleteRoadmapItem(id) {
     .from('roadmap')
     .delete()
     .eq('id', id)
-  if (error) console.error('deleteRoadmapItem:', error)
+  if (error) { console.error('deleteRoadmapItem error:', error.message); throw error }
 }
 
-// ─── Realtime subscription ─────────────────────────────────────────────────
+// ─── Realtime ─────────────────────────────────────────────────────────────
 
-/**
- * Subscribe to live rating changes.
- * onInsert / onUpdate / onDelete each receive the changed row.
- * Returns an unsubscribe function.
- */
 export function subscribeToRatings({ onInsert, onUpdate, onDelete }) {
   const channel = supabase
     .channel('ratings-live')
-    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'ratings' }, (payload) => onInsert?.(payload.new))
-    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'ratings' }, (payload) => onUpdate?.(payload.new))
-    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'ratings' }, (payload) => onDelete?.(payload.old))
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'ratings' },
+      (payload) => onInsert?.(payload.new))
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'ratings' },
+      (payload) => onUpdate?.(payload.new))
+    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'ratings' },
+      (payload) => onDelete?.(payload.old))
     .subscribe()
+  return () => supabase.removeChannel(channel)
+}
 
+export function subscribeToPlaylist({ onChange }) {
+  const channel = supabase
+    .channel('playlist-live')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'playlist' },
+      (payload) => onChange?.(payload.new))
+    .subscribe()
   return () => supabase.removeChannel(channel)
 }

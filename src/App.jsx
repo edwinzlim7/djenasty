@@ -1,3 +1,4 @@
+console.log("APP RENDERED");
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "./supabaseClient";
 

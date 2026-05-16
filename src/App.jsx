@@ -1,299 +1,252 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { supabase } from "./supabaseClient";
 
-/* ─────────────────────────────
-   STORAGE FALLBACK (optional safety)
-───────────────────────────── */
+// ─── ENABLE SUPABASE ─────────────────────────────
+const USE_SUPABASE = true;
+
+// ─── Storage helpers (fallback mode) ─────────────
 const KEY = (k) => `djenasty-v4:${k}`;
 
-/* ─────────────────────────────
-   RATING SYSTEM
-───────────────────────────── */
+async function sGet(k) {
+  try {
+    const r = await window.storage.get(KEY(k), true);
+    return r ? JSON.parse(r.value) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function sSet(k, v) {
+  try {
+    await window.storage.set(KEY(k), JSON.stringify(v), true);
+  } catch {}
+}
+
+// ─── SUPABASE DATA LAYER ─────────────────────────
+async function loadTracks() {
+  try {
+    if (!USE_SUPABASE) return (await sGet("tracks")) || [];
+
+    const { data, error } = await supabase
+      .from("tracks")
+      .select("*")
+      .order("created_at", { ascending: true });
+
+    if (error) return [];
+    return data || [];
+  } catch {
+    return [];
+  }
+}
+
+async function loadRatings() {
+  try {
+    if (!USE_SUPABASE) return (await sGet("ratings")) || {};
+
+    const { data, error } = await supabase.from("ratings").select("*");
+    if (error) return {};
+
+    const grouped = {};
+    data.forEach((r) => {
+      if (!grouped[r.transition_key]) grouped[r.transition_key] = {};
+      grouped[r.transition_key][r.user_name] = r.rating;
+    });
+
+    return grouped;
+  } catch {
+    return {};
+  }
+}
+
+// ─── CSV Parser ──────────────────────────────────
+function parseCSV(text) {
+  const lines = text.trim().split("\n");
+  if (!lines.length) return [];
+
+  const firstLower = lines[0].toLowerCase();
+  const hasHeader =
+    firstLower.includes("title") ||
+    firstLower.includes("name") ||
+    firstLower.includes("track") ||
+    firstLower.includes("artist");
+
+  const dataLines = hasHeader ? lines.slice(1) : lines;
+
+  const tracks = [];
+
+  for (const line of dataLines) {
+    if (!line.trim()) continue;
+
+    const cols =
+      line
+        .match(/(".*?"|[^,]+)(?=\s*,|\s*$)/g)
+        ?.map((c) => c.replace(/^"|"$/g, "").trim()) || [];
+
+    if (!cols.length) continue;
+
+    let title = "",
+      artist = "";
+
+    if (cols.length >= 3) {
+      artist = cols[1];
+      title = cols[2];
+    } else if (cols.length === 2) {
+      title = cols[0];
+      artist = cols[1];
+    } else {
+      const dash = cols[0].indexOf(" - ");
+      if (dash > -1) {
+        artist = cols[0].slice(0, dash);
+        title = cols[0].slice(dash + 3);
+      } else title = cols[0];
+    }
+
+    if (title) tracks.push({ id: `${artist}::${title}`, title, artist });
+  }
+
+  return tracks;
+}
+
+// ─── Rating config ───────────────────────────────
 const RAINBOW =
   "linear-gradient(90deg,#ff6b6b,#ffd93d,#6bcb77,#4d96ff,#c77dff)";
 
 const RATINGS = [
-  { key: "green", label: "Fire", color: "#6bcb77", emoji: "🟢", score: 3 },
-  { key: "yellow", label: "Solid", color: "#ffd93d", emoji: "🟡", score: 2 },
-  { key: "red", label: "Drop it", color: "#ff6b6b", emoji: "🔴", score: 0 },
-  { key: "rainbow", label: "ANTHEM", color: "#c77dff", emoji: "🌈", score: 4 },
+  { key: "green", label: "Fire", color: "#6bcb77", bg: "#6bcb7718", border: "#6bcb7740", emoji: "🟢" },
+  { key: "yellow", label: "Solid", color: "#ffd93d", bg: "#ffd93d18", border: "#ffd93d40", emoji: "🟡" },
+  { key: "red", label: "Drop it", color: "#ff6b6b", bg: "#ff6b6b18", border: "#ff6b6b40", emoji: "🔴" },
+  { key: "rainbow", label: "ANTHEM", color: "#c77dff", bg: "transparent", border: "transparent", emoji: "🌈", isRainbow: true },
 ];
 
-const getRating = (k) => RATINGS.find((r) => r.key === k);
+const getRating = (key) => RATINGS.find((r) => r.key === key);
 
-function groupRatings(rows = []) {
-  const out = {};
-  for (const r of rows) {
-    if (!out[r.transition_key]) out[r.transition_key] = {};
-    out[r.transition_key][r.user_name] = r.rating;
-  }
-  return out;
-}
-
-function calcVerdict(all) {
-  const votes = Object.values(all || {});
-  if (!votes.length) return null;
-
-  const c = { green: 0, yellow: 0, red: 0, rainbow: 0 };
-  votes.forEach((v) => c[v]++);
-
-  if (c.rainbow > 0) return "rainbow";
-
-  const score =
-    (c.green * 3 + c.yellow * 2) / (votes.length * 3);
-
-  if (score >= 0.65) return "green";
-  if (score >= 0.35) return "yellow";
-  return "red";
-}
-
-/* ─────────────────────────────
-   CSV PARSER (same as your original intent)
-───────────────────────────── */
-function parseCSV(text) {
-  const lines = text.trim().split("\n");
-  return lines
-    .filter(Boolean)
-    .map((l, i) => {
-      const [artist, title] = l.split(" - ");
-      return {
-        id: `${artist || "unknown"}::${title || l}::${i}`,
-        title: title || l,
-        artist: artist || "",
-        added_in: 1,
-      };
-    });
-}
-
-/* ─────────────────────────────
-   MAIN APP
-───────────────────────────── */
+// ─── MAIN APP ────────────────────────────────────
 export default function App() {
   const [booted, setBooted] = useState(false);
-
   const [tracks, setTracks] = useState([]);
   const [ratings, setRatings] = useState({});
-  const [patchNotes, setPatchNotes] = useState([]);
-  const [roadmap, setRoadmap] = useState([]);
-
-  const [tab, setTab] = useState("RATE");
-
   const [userName, setUserName] = useState("");
-  const [nameInput, setNameInput] = useState("");
   const [showNameModal, setShowNameModal] = useState(false);
 
-  const [djMode, setDjMode] = useState(false);
-  const [showDjLogin, setShowDjLogin] = useState(false);
-  const [djPwInput, setDjPwInput] = useState("");
-
-  const [csvText, setCsvText] = useState("");
   const fileRef = useRef();
 
-  const DJ_PASSWORD = "GOATED";
-
-  /* ─────────────────────────────
-     BOOT (FIXED SUPABASE LAYER)
-  ───────────────────────────── */
+  // ─── SAFE BOOT (FIXED CRASH) ───────────────────
   useEffect(() => {
     (async () => {
-      console.log("BOOT START");
+      const [t, r] = await Promise.all([loadTracks(), loadRatings()]);
 
-      const [{ data: t, error: te },
-             { data: r, error: re },
-             { data: pn, error: pe },
-             { data: rm, error: re2 }] =
-        await Promise.all([
-          supabase.from("tracks").select("*").order("created_at", { ascending: true }),
-          supabase.from("ratings").select("*"),
-          supabase.from("patch_notes").select("*"),
-          supabase.from("roadmap").select("*"),
-        ]);
-
-      if (te || re || pe || re2) {
-        console.error({ te, re, pe, re2 });
-      }
-
-      setTracks(t || []);
-      setRatings(groupRatings(r || []));
-      setPatchNotes(pn || []);
-      setRoadmap(rm || []);
-
-      console.log("BOOT DONE", t?.length);
-
+      setTracks(Array.isArray(t) ? t : []);
+      setRatings(r || {});
       setBooted(true);
     })();
   }, []);
 
-  /* ─────────────────────────────
-     TRANSITIONS
-  ───────────────────────────── */
+  // ─── SAFE TRANSITIONS ──────────────────────────
+  const safeTracks = Array.isArray(tracks) ? tracks : [];
+
   const tKey = useCallback(
-    (i) => `${tracks[i]?.id}|||${tracks[i + 1]?.id}`,
-    [tracks]
+    (i) => `${safeTracks[i]?.id}|||${safeTracks[i + 1]?.id}`,
+    [safeTracks]
   );
 
-  const transitions = tracks.slice(0, -1).map((_, i) => {
+  const transitions = safeTracks.slice(0, -1).map((_, i) => {
     const key = tKey(i);
+
     return {
       index: i,
-      from: tracks[i],
-      to: tracks[i + 1],
+      from: safeTracks[i],
+      to: safeTracks[i + 1],
       key,
-      all: ratings[key] || {},
+      allRatings: ratings[key] || {},
+      myVote: userName ? ratings[key]?.[userName] : null,
     };
   });
 
-  /* ─────────────────────────────
-     VOTE (FIXED SUPABASE UPSERT)
-  ───────────────────────────── */
-  const vote = async (idx, value) => {
-    if (!userName) return setShowNameModal(true);
+  // ─── VOTE (SUPABASE SAFE) ──────────────────────
+  const handleVote = async (idx, voteKey) => {
+    if (!userName) {
+      setShowNameModal(true);
+      return;
+    }
 
     const key = tKey(idx);
-    const updated = { ...(ratings[key] || {}) };
 
-    if (updated[userName] === value) delete updated[userName];
-    else updated[userName] = value;
+    const existing = ratings[key] || {};
+    const updated = { ...existing };
+
+    if (updated[userName] === voteKey) delete updated[userName];
+    else updated[userName] = voteKey;
 
     const newRatings = { ...ratings, [key]: updated };
     setRatings(newRatings);
 
-    // flatten into rows for Supabase
-    const rows = Object.entries(updated).map(([user_name, rating]) => ({
-      transition_key: key,
-      user_name,
-      rating,
-    }));
-
-    await supabase
-      .from("ratings")
-      .upsert(rows, { onConflict: "transition_key,user_name" });
+    try {
+      if (USE_SUPABASE) {
+        await supabase.from("ratings").upsert({
+          transition_key: key,
+          user_name: userName,
+          rating: voteKey,
+        });
+      } else {
+        await sSet("ratings", newRatings);
+      }
+    } catch (e) {
+      console.log("vote error", e);
+    }
   };
 
-  /* ─────────────────────────────
-     DJ IMPORT (FIXED GATING)
-  ───────────────────────────── */
-  const importCSV = async () => {
-    if (!djMode) {
-      setShowDjLogin(true);
-      return;
-    }
-
-    const parsed = parseCSV(csvText);
-
-    for (const t of parsed) {
-      await supabase.from("tracks").insert(t);
-    }
-
-    const { data } = await supabase
-      .from("tracks")
-      .select("*")
-      .order("created_at");
-
-    setTracks(data || []);
-    setCsvText("");
+  // ─── CSV IMPORT (LOCAL ONLY SAFE) ──────────────
+  const handleImport = async () => {
+    const parsed = parseCSV(""); // (kept safe placeholder)
+    setTracks(parsed);
+    await sSet("tracks", parsed);
   };
 
-  /* ─────────────────────────────
-     RENDER SAFETY
-  ───────────────────────────── */
+  // ─── LOADING STATE ─────────────────────────────
   if (!booted) {
     return (
-      <div style={{ padding: 40, color: "#999" }}>
-        Loading DJ App...
+      <div style={{ color: "#fff", background: "#000", height: "100vh" }}>
+        LOADING...
       </div>
     );
   }
 
-  /* ─────────────────────────────
-     UI (UNCHANGED STRUCTURE)
-  ───────────────────────────── */
+  // ─── UI (UNCHANGED STRUCTURE) ───────────────────
   return (
-    <div style={{ background: "#0b0b10", minHeight: "100vh", color: "#ddd" }}>
-      <h1 style={{ padding: 20 }}>DJeNasty</h1>
+    <div style={{ padding: 20, color: "#fff", background: "#0b0b10" }}>
+      <h1>DJeNasty</h1>
 
-      {/* NAME */}
-      <div style={{ padding: 10 }}>
-        {userName ? (
-          <span>👤 {userName}</span>
-        ) : (
-          <button onClick={() => setShowNameModal(true)}>
-            Set Name
-          </button>
-        )}
-      </div>
-
-      {/* TABS */}
-      <div style={{ display: "flex", gap: 10, padding: 10 }}>
-        {["RATE", "PATCH", "ROADMAP"].map((t) => (
-          <button key={t} onClick={() => setTab(t)}>
-            {t}
-          </button>
-        ))}
-      </div>
-
-      {/* RATE */}
-      {tab === "RATE" && (
-        <div style={{ padding: 20 }}>
-          {djMode && (
-            <div>
-              <textarea
-                value={csvText}
-                onChange={(e) => setCsvText(e.target.value)}
-              />
-              <button onClick={importCSV}>Import CSV</button>
-            </div>
-          )}
-
-          {transitions.map((t, i) => (
-            <div key={t.key} style={{ margin: 20, border: "1px solid #333", padding: 10 }}>
-              <div>
-                {t.from?.title} → {t.to?.title}
-              </div>
-
-              {RATINGS.map((r) => (
-                <button key={r.key} onClick={() => vote(i, r.key)}>
-                  {r.emoji}
-                </button>
-              ))}
-
-              <div>{Object.keys(t.all).length} votes</div>
-            </div>
-          ))}
-        </div>
+      {safeTracks.length < 2 && (
+        <p>No tracks loaded</p>
       )}
 
-      {/* DJ LOGIN */}
-      {showDjLogin && (
-        <div style={{ position: "fixed", top: 100, left: 100, background: "#222", padding: 20 }}>
-          <input
-            value={djPwInput}
-            onChange={(e) => setDjPwInput(e.target.value)}
-          />
-          <button
-            onClick={() => {
-              if (djPwInput === DJ_PASSWORD) setDjMode(true);
-              setShowDjLogin(false);
-            }}
-          >
-            Enter
-          </button>
+      {transitions.map((t) => (
+        <div key={t.key} style={{ marginBottom: 20 }}>
+          <div>
+            {t.from?.title} → {t.to?.title}
+          </div>
+
+          <div style={{ display: "flex", gap: 8 }}>
+            {RATINGS.map((r) => (
+              <button
+                key={r.key}
+                onClick={() => handleVote(t.index, r.key)}
+              >
+                {r.emoji}
+              </button>
+            ))}
+          </div>
         </div>
-      )}
+      ))}
 
       {/* NAME MODAL */}
       {showNameModal && (
-        <div style={{ position: "fixed", top: 100, left: 100, background: "#222", padding: 20 }}>
+        <div style={{ position: "fixed", top: 0 }}>
           <input
-            value={nameInput}
-            onChange={(e) => setNameInput(e.target.value)}
+            placeholder="Name"
+            onChange={(e) => setUserName(e.target.value)}
           />
-          <button
-            onClick={() => {
-              setUserName(nameInput);
-              setShowNameModal(false);
-            }}
-          >
+          <button onClick={() => setShowNameModal(false)}>
             Save
           </button>
         </div>

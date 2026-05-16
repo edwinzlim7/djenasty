@@ -1,125 +1,98 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "./supabaseClient";
 
-// ─── CSV Parser ───────────────────────────────────────────────────────────
-function parseCSV(text) {
-  const lines = text.trim().split("\n");
-  if (!lines.length) return [];
-
-  const firstLower = lines[0].toLowerCase();
-  const hasHeader =
-    firstLower.includes("title") ||
-    firstLower.includes("name") ||
-    firstLower.includes("track") ||
-    firstLower.includes("artist");
-
-  const dataLines = hasHeader ? lines.slice(1) : lines;
-  const tracks = [];
-
-  for (const line of dataLines) {
-    if (!line.trim()) continue;
-
-    const cols =
-      line.match(/(".*?"|[^,]+)(?=\s*,|\s*$)/g)?.map(c => c.replace(/^"|"$/g, "").trim()) ||
-      [];
-
-    if (!cols.length) continue;
-
-    let title = "", artist = "";
-
-    if (cols.length >= 3) {
-      artist = cols[1];
-      title = cols[2];
-    } else if (cols.length === 2) {
-      title = cols[0];
-      artist = cols[1];
-    } else {
-      const dash = cols[0].indexOf(" - ");
-      if (dash > -1) {
-        artist = cols[0].slice(0, dash);
-        title = cols[0].slice(dash + 3);
-      } else {
-        title = cols[0];
-      }
-    }
-
-    if (title) tracks.push({ id: `${artist}::${title}`, title, artist });
-  }
-
-  return tracks;
-}
-
-// ─── Ratings ─────────────────────────────────────────────────────────────
-const RAINBOW =
-  "linear-gradient(90deg,#ff6b6b,#ffd93d,#6bcb77,#4d96ff,#c77dff)";
-
+// ==============================
+// CONFIG
+// ==============================
 const RATINGS = [
-  { key: "green", label: "Fire", color: "#6bcb77", emoji: "🟢" },
-  { key: "yellow", label: "Solid", color: "#ffd93d", emoji: "🟡" },
-  { key: "red", label: "Drop", color: "#ff6b6b", emoji: "🔴" },
-  { key: "rainbow", label: "ANTHEM", color: "#c77dff", emoji: "🌈", isRainbow: true }
+  { key: "green", label: "Fire", color: "#6bcb77", emoji: "🟢", score: 3 },
+  { key: "yellow", label: "Solid", color: "#ffd93d", emoji: "🟡", score: 2 },
+  { key: "red", label: "Drop", color: "#ff6b6b", emoji: "🔴", score: 0 },
+  { key: "rainbow", label: "ANTHEM", color: "#c77dff", emoji: "🌈", score: 4 },
 ];
 
-const getRating = (key) => RATINGS.find(r => r.key === key);
+const DJ_PASSWORD = "GOATED";
 
-// ─── Helpers ─────────────────────────────────────────────────────────────
-function calcVerdict(allRatings) {
-  const votes = Object.values(allRatings || {});
-  if (!votes.length) return null;
+// ==============================
+// HELPERS
+// ==============================
+const getRating = (k) => RATINGS.find((r) => r.key === k);
 
-  const c = { green: 0, yellow: 0, red: 0, rainbow: 0 };
-  votes.forEach(v => c[v] !== undefined && c[v]++);
+function groupRatings(rows) {
+  const grouped = {};
+  rows.forEach((r) => {
+    if (!grouped[r.transition_key]) grouped[r.transition_key] = {};
+    grouped[r.transition_key][r.user_name] = r.rating;
+  });
+  return grouped;
+}
 
-  if (c.rainbow > 0) return "rainbow";
+function verdict(all) {
+  const vals = Object.values(all || {});
+  if (!vals.length) return null;
 
-  const score = (c.green * 3 + c.yellow * 2) / (votes.length * 3);
+  const counts = { green: 0, yellow: 0, red: 0, rainbow: 0 };
+  vals.forEach((v) => counts[v]++);
+
+  if (counts.rainbow > 0) return "rainbow";
+
+  const score =
+    (counts.green * 3 + counts.yellow * 2) / (vals.length * 3);
 
   if (score >= 0.65) return "green";
   if (score >= 0.35) return "yellow";
   return "red";
 }
 
-// ─── Main App ─────────────────────────────────────────────────────────────
+// ==============================
+// APP
+// ==============================
 export default function App() {
   const [booted, setBooted] = useState(false);
+
   const [tracks, setTracks] = useState([]);
   const [ratings, setRatings] = useState({});
-  const [userName, setUserName] = useState("");
-  const [nameInput, setNameInput] = useState("");
-  const [showNameModal, setShowNameModal] = useState(false);
 
-  const [csvText, setCsvText] = useState("");
-  const [currentVersion, setCurrentVersion] = useState(1);
+  const [userName, setUserName] = useState("");
+  const [tab, setTab] = useState("RATE");
+
+  const [djMode, setDjMode] = useState(false);
+  const [djInput, setDjInput] = useState("");
+
+  const [patchNotes, setPatchNotes] = useState([]);
+  const [roadmap, setRoadmap] = useState([]);
 
   const fileRef = useRef();
 
-  // ─── LOAD FROM SUPABASE ────────────────────────────────────────────────
-  useEffect(() => {
-    const load = async () => {
-      const [playlistRes, ratingsRes, versionRes] = await Promise.all([
-        supabase.from("playlist").select("*").eq("id", "main").single(),
+  // ==============================
+  // LOAD DATA
+  // ==============================
+  async function loadAll() {
+    const [{ data: t }, { data: r }, { data: p }, { data: rm }] =
+      await Promise.all([
+        supabase.from("tracks").select("*").order("created_at"),
         supabase.from("ratings").select("*"),
-        supabase.from("playlist").select("version").eq("id", "main").single()
+        supabase.from("patch_notes").select("*").order("id", { ascending: false }),
+        supabase.from("roadmap").select("*").order("sort_order"),
       ]);
 
-      if (playlistRes.data) setTracks(playlistRes.data.tracks || []);
-      if (versionRes.data) setCurrentVersion(versionRes.data.version || 1);
+    setTracks(t || []);
+    setRatings(groupRatings(r || []));
+    setPatchNotes(p || []);
+    setRoadmap(rm || []);
+  }
 
-      // group ratings
-      const grouped = {};
-      (ratingsRes.data || []).forEach(r => {
-        if (!grouped[r.transition_key]) grouped[r.transition_key] = {};
-        grouped[r.transition_key][r.user_name] = r.rating;
-      });
-
-      setRatings(grouped);
+  // initial load
+  useEffect(() => {
+    (async () => {
+      await loadAll();
       setBooted(true);
-    };
-
-    load();
+    })();
   }, []);
 
-  // ─── REALTIME ──────────────────────────────────────────────────────────
+  // ==============================
+  // REALTIME RATINGS
+  // ==============================
   useEffect(() => {
     const channel = supabase
       .channel("ratings-live")
@@ -128,27 +101,7 @@ export default function App() {
         { event: "*", schema: "public", table: "ratings" },
         async () => {
           const { data } = await supabase.from("ratings").select("*");
-
-          const grouped = {};
-          (data || []).forEach(r => {
-            if (!grouped[r.transition_key]) grouped[r.transition_key] = {};
-            grouped[r.transition_key][r.user_name] = r.rating;
-          });
-
-          setRatings(grouped);
-        }
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "playlist" },
-        async () => {
-          const { data } = await supabase
-            .from("playlist")
-            .select("*")
-            .eq("id", "main")
-            .single();
-
-          if (data) setTracks(data.tracks || []);
+          setRatings(groupRatings(data || []));
         }
       )
       .subscribe();
@@ -156,147 +109,188 @@ export default function App() {
     return () => supabase.removeChannel(channel);
   }, []);
 
-  // ─── TRANSITIONS ───────────────────────────────────────────────────────
-  const tKey = useCallback((i) => {
-    return `${tracks[i]?.id}|||${tracks[i + 1]?.id}`;
+  // ==============================
+  // TRANSITIONS
+  // ==============================
+  const transitions = useMemo(() => {
+    return tracks.slice(0, -1).map((t, i) => ({
+      from: tracks[i],
+      to: tracks[i + 1],
+      key: `${tracks[i].id}|||${tracks[i + 1].id}`,
+      index: i,
+    }));
   }, [tracks]);
 
-  const transitions = tracks.slice(0, -1).map((_, i) => ({
-    index: i,
-    from: tracks[i],
-    to: tracks[i + 1],
-    key: tKey(i),
-    allRatings: ratings[tKey(i)] || {},
-    myVote: userName ? ratings[tKey(i)]?.[userName] : null
-  }));
+  function transitionKey(i) {
+    return `${tracks[i].id}|||${tracks[i + 1].id}`;
+  }
 
-  // ─── VOTE ───────────────────────────────────────────────────────────────
-  const handleVote = async (idx, voteKey) => {
-    if (!userName) return setShowNameModal(true);
+  // ==============================
+  // VOTE (SUPABASE UPSERT)
+  // ==============================
+  async function vote(i, rating) {
+    if (!userName) return alert("Enter name first");
 
-    const key = tKey(idx);
-    const existing = ratings[key]?.[userName];
-
-    if (existing === voteKey) {
-      await supabase
-        .from("ratings")
-        .delete()
-        .eq("transition_key", key)
-        .eq("user_name", userName);
-      return;
-    }
+    const key = transitionKey(i);
 
     await supabase.from("ratings").upsert({
       transition_key: key,
       user_name: userName,
-      rating: voteKey
+      rating,
+      updated_at: new Date(),
     });
-  };
+  }
 
-  // ─── IMPORT PLAYLIST ───────────────────────────────────────────────────
-  const handleImport = async () => {
-    const parsed = parseCSV(csvText);
-    if (parsed.length < 2) return;
+  // ==============================
+  // DJ LOGIN
+  // ==============================
+  function login() {
+    if (djInput === DJ_PASSWORD) setDjMode(true);
+    else alert("Wrong password");
+  }
 
-    const newVersion = currentVersion + 1;
+  // ==============================
+  // PATCH NOTES
+  // ==============================
+  async function addPatch(text) {
+    const lines = text.split("\n").filter(Boolean);
 
-    setTracks(parsed);
-    setCurrentVersion(newVersion);
-
-    await supabase.from("playlist").upsert({
-      id: "main",
-      tracks: parsed,
-      version: newVersion
+    await supabase.from("patch_notes").insert({
+      version: 1,
+      note_date: new Date().toLocaleDateString(),
+      notes: lines,
     });
 
-    setCsvText("");
-  };
+    await loadAll();
+  }
 
-  // ─── UI ───────────────────────────────────────────────────────────────
-  if (!booted) {
-    return (
-      <div style={{ color: "#333", padding: 40 }}>Loading...</div>
+  // ==============================
+  // ROADMAP
+  // ==============================
+  async function addRoad(text) {
+    const items = text.split("\n").filter(Boolean);
+
+    await supabase.from("roadmap").insert(
+      items.map((t, i) => ({
+        text: t,
+        done: false,
+        sort_order: i,
+      }))
     );
+
+    await loadAll();
+  }
+
+  async function toggleRoad(id, done) {
+    await supabase
+      .from("roadmap")
+      .update({ done: !done })
+      .eq("id", id);
+
+    await loadAll();
+  }
+
+  // ==============================
+  // CSV IMPORT (tracks)
+  // ==============================
+  async function importCSV(text) {
+    const lines = text.split("\n").filter(Boolean);
+
+    const rows = lines.map((l) => {
+      const [artist, title] = l.split(" - ");
+      return {
+        id: `${artist}::${title}`,
+        artist,
+        title,
+      };
+    });
+
+    await supabase.from("tracks").upsert(rows);
+
+    await loadAll();
+  }
+
+  // ==============================
+  // REAL UI (MINIMAL CLEAN VERSION)
+  // ==============================
+  if (!booted) {
+    return <div style={{ color: "#999", padding: 40 }}>Loading...</div>;
   }
 
   return (
-    <div style={{ padding: 20, fontFamily: "monospace", color: "#ddd" }}>
+    <div style={{ fontFamily: "monospace", padding: 20, background: "#0b0b10", color: "#ddd", minHeight: "100vh" }}>
 
-      <h1>DJ App (Supabase)</h1>
+      {/* HEADER */}
+      <h1>DJ APP</h1>
 
-      {/* NAME */}
-      <div style={{ marginBottom: 20 }}>
-        {userName ? (
-          <div>👤 {userName}</div>
-        ) : (
-          <button onClick={() => setShowNameModal(true)}>
-            Set Name
-          </button>
-        )}
-      </div>
+      <input
+        placeholder="Your name"
+        value={userName}
+        onChange={(e) => setUserName(e.target.value)}
+      />
 
-      {/* IMPORT */}
-      <div style={{ marginBottom: 20 }}>
-        <textarea
-          value={csvText}
-          onChange={(e) => setCsvText(e.target.value)}
-          placeholder="Paste Spotify CSV"
-          rows={4}
-          style={{ width: "100%" }}
-        />
-        <button onClick={handleImport}>
-          Import Playlist
-        </button>
-      </div>
+      <hr />
 
-      {/* TRANSITIONS */}
-      {transitions.map((t, i) => (
-        <div key={t.key} style={{ border: "1px solid #333", marginBottom: 10, padding: 10 }}>
-
-          <div>{t.from.title} → {t.to.title}</div>
-
-          <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
-            {RATINGS.map(r => (
-              <button
-                key={r.key}
-                onClick={() => handleVote(i, r.key)}
-                style={{
-                  background: t.myVote === r.key ? r.color : "#111",
-                  color: "#fff"
-                }}
-              >
-                {r.emoji}
-              </button>
-            ))}
-          </div>
-
-          <div style={{ marginTop: 6 }}>
-            Votes: {Object.keys(t.allRatings).length}
-          </div>
+      {/* LOGIN */}
+      {!djMode ? (
+        <div>
+          <input
+            type="password"
+            placeholder="DJ password"
+            value={djInput}
+            onChange={(e) => setDjInput(e.target.value)}
+          />
+          <button onClick={login}>Login</button>
         </div>
-      ))}
-
-      {/* NAME MODAL */}
-      {showNameModal && (
-        <div style={{ position: "fixed", inset: 0, background: "#0008" }}>
-          <div style={{ background: "#111", padding: 20, margin: 100 }}>
-            <input
-              value={nameInput}
-              onChange={(e) => setNameInput(e.target.value)}
-              placeholder="Your name"
-            />
-            <button
-              onClick={() => {
-                setUserName(nameInput);
-                setShowNameModal(false);
-              }}
-            >
-              Save
-            </button>
-          </div>
-        </div>
+      ) : (
+        <p>DJ MODE ACTIVE</p>
       )}
 
+      <hr />
+
+      {/* TRACKS */}
+      <h2>Rate Transitions</h2>
+
+      {transitions.map((t, i) => {
+        const key = t.key;
+        const all = ratings[key] || {};
+        const v = verdict(all);
+        const r = getRating(v);
+
+        return (
+          <div key={key} style={{ marginBottom: 20, padding: 10, border: "1px solid #222" }}>
+            <div>{t.from.title} → {t.to.title}</div>
+
+            <div style={{ display: "flex", gap: 10 }}>
+              {RATINGS.map((r) => (
+                <button key={r.key} onClick={() => vote(i, r.key)}>
+                  {r.emoji}
+                </button>
+              ))}
+            </div>
+
+            <div style={{ marginTop: 5 }}>
+              {r ? r.label : "No votes"}
+            </div>
+          </div>
+        );
+      })}
+
+      <hr />
+
+      {/* PATCH */}
+      {djMode && (
+        <button onClick={() => addPatch(prompt("Patch notes"))}>
+          Add Patch Notes
+        </button>
+      )}
+
+      {/* ROADMAP */}
+      {djMode && (
+        <button onClick={() => addRoad(prompt("Roadmap items"))}>
+          Add Roadmap
+        </button>
+      )}
     </div>
   );
 }

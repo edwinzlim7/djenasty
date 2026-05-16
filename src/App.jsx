@@ -1,4 +1,7 @@
 console.log("APP RENDERED");
+useEffect(() => {
+  console.log("TRACKS STATE:", tracks);
+}, [tracks]);
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "./supabaseClient";
 

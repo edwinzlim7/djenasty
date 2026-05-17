@@ -78,10 +78,36 @@ function parseCSV(text) {
       else title = cols[0]
     }
 
-    if (title) tracks.push({ id: `${artist}::${title}`, title, artist, albumArt })
-  }
+  if (title) {
+  const rawSpotify = cols[0]?.trim() || ''
 
-  return tracks
+  const spotifyId = rawSpotify
+    .replace('spotify:track:', '')
+    .replace('https://open.spotify.com/track/', '')
+    .split('?')[0]
+
+  tracks.push({
+    id: `${artist}::${title}`,
+    title,
+    artist,
+    albumArt,
+    spotifyId,
+  })
+}
+}
+async function fetchSpotifyArt(trackId) {
+  try {
+    const url = `https://open.spotify.com/oembed?url=https://open.spotify.com/track/${trackId}`
+
+    const res = await fetch(url)
+    if (!res.ok) return ''
+
+    const data = await res.json()
+
+    return data.thumbnail_url || ''
+  } catch {
+    return ''
+  }
 }
 
 // ─── Rating config ─────────────────────────────────────────────────────────
@@ -399,12 +425,24 @@ export default function App() {
   const handleImport = async () => {
     setCsvError(''); setImportMsg(''); setImporting(true)
     try {
-      const parsed = parseCSV(csvText)
-      if (parsed.length < 2) { setCsvError('Need at least 2 tracks. Check format.'); setImporting(false); return }
+const parsed = parseCSV(csvText)
 
-      const oldIds = new Set(tracks.map(t => t.id))
-      const addedIds = parsed.map(t => t.id).filter(id => !oldIds.has(id))
-      const newVersion = currentVersion + 1
+if (parsed.length < 2) {
+  setCsvError('Need at least 2 tracks. Check format.')
+  setImporting(false)
+  return
+}
+
+// Fetch Spotify album art automatically
+await Promise.all(parsed.map(async track => {
+  if (!track.albumArt && track.spotifyId) {
+    track.albumArt = await fetchSpotifyArt(track.spotifyId)
+  }
+}))
+
+const oldIds = new Set(tracks.map(t => t.id))
+const addedIds = parsed.map(t => t.id).filter(id => !oldIds.has(id))
+const newVersion = currentVersion + 1
 
       // 1. Snapshot current ratings into history BEFORE changing anything
       await saveHistorySnapshot(ratings, currentVersion)

@@ -660,7 +660,7 @@ export default function App() {
             DJ<span style={{ background: RAINBOW, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>eNasty</span>
           </div>
           {tracks.length > 0 && (
-            <div style={{ fontSize: 10, color: '#22202e', marginTop: 5, letterSpacing: 2 }}>
+            <div style={{ fontSize: 10, color: '#7870a8', marginTop: 5, letterSpacing: 2 }}>
               VERSION {currentVersion} · {tracks.length} TRACKS · {transitions.length} TRANSITIONS
             </div>
           )}
@@ -695,7 +695,10 @@ export default function App() {
               👤 {userName}
             </span>
             <button onClick={() => { setNameInput(userName); setNameModal(true) }}
-              style={{ background: 'none', border: 'none', color: '#252530', fontSize: 10, cursor: 'pointer', fontFamily: 'inherit' }}>change</button>
+              style={{ background: '#1e1c2a', border: '1px solid #3a3560', color: '#9490aa', fontSize: 10, cursor: 'pointer', fontFamily: 'inherit', borderRadius: 20, padding: '4px 11px', transition: 'all .15s' }}
+              onMouseEnter={e => { e.currentTarget.style.background = '#2a2840'; e.currentTarget.style.color = '#c8c4d8' }}
+              onMouseLeave={e => { e.currentTarget.style.background = '#1e1c2a'; e.currentTarget.style.color = '#9490aa' }}
+            >change</button>
           </>
         ) : (
           <button onClick={() => setNameModal(true)} style={{ ...S.btn('#16151f', '#555'), fontSize: 10, padding: '7px 13px' }}>
@@ -928,20 +931,20 @@ export default function App() {
                   { label: 'VOTERS', value: analytics.totalVoters, color: '#c77dff' },
                   { label: 'AVG / TRANSITION', value: analytics.avgVotesPerTransition, color: '#ffd93d' },
                 ].map(s => (
-                  <div key={s.label} style={{ textAlign: 'center', background: '#08080f', borderRadius: 10, padding: '14px 8px', border: '1px solid #16151f' }}>
-                    <div style={{ fontSize: 22, fontWeight: 900, color: s.color, fontFamily: "'Playfair Display',serif" }}>{s.value}</div>
-                    <div style={{ fontSize: 8, letterSpacing: 2, color: '#252530', marginTop: 4 }}>{s.label}</div>
+                  <div key={s.label} style={{ textAlign: 'center', background: '#13111e', borderRadius: 10, padding: '16px 8px', border: `1px solid ${s.color}33` }}>
+                    <div style={{ fontSize: 26, fontWeight: 900, color: s.color, fontFamily: "'Playfair Display',serif", lineHeight: 1 }}>{s.value}</div>
+                    <div style={{ fontSize: 8, letterSpacing: 2, color: '#7870a8', marginTop: 6 }}>{s.label}</div>
                   </div>
                 ))}
               </div>
 
               {/* Global vote breakdown */}
-              <div style={{ fontSize: 9, letterSpacing: 3, color: '#33303f', marginBottom: 10 }}>VOTE BREAKDOWN</div>
+              <div style={{ fontSize: 9, letterSpacing: 3, color: '#7870a8', marginBottom: 12 }}>VOTE BREAKDOWN</div>
               {RATINGS.map(rv => (
-                <div key={rv.key} style={{ marginBottom: 8 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
-                    <span style={{ fontSize: 10, color: rv.isRainbow ? '#c77dff' : rv.color }}>{rv.emoji} {rv.label}</span>
-                    <span style={{ fontSize: 10, color: '#333' }}>
+                <div key={rv.key} style={{ marginBottom: 10 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <span style={{ fontSize: 11, color: rv.isRainbow ? '#c77dff' : rv.color, fontWeight: 600 }}>{rv.emoji} {rv.label}</span>
+                    <span style={{ fontSize: 11, color: '#9490aa' }}>
                       {analytics.totalVotes > 0 ? Math.round((analytics.globalCounts[rv.key] / analytics.totalVotes) * 100) : 0}%
                     </span>
                   </div>

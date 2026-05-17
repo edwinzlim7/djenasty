@@ -30,22 +30,30 @@ function parseCSV(text) {
   const lines = text.trim().split('\n')
   if (!lines.length) return []
 
-  const headerLine = lines[0].toLowerCase()
-  const hasHeader = ['title', 'name', 'track', 'artist'].some(w => headerLine.includes(w))
+  // Always read the header row to find columns by name — never guess by index
+  const headerCols = splitCSVLine(lines[0]).map(h => h.toLowerCase().replace(/"/g, '').trim())
+  const hasHeader = headerCols.some(h =>
+    h.includes('title') || h.includes('track') || h.includes('artist') || h.includes('name')
+  )
 
-  // Detect Exportify by checking header for "artist ids" or "artist name(s)"
-  // Exportify columns: Spotify ID(0), Artist IDs(1), Track Name(2), Album Name(3), Artist Name(s)(4), ...
-  const isExportify = headerLine.includes('artist ids') || headerLine.includes('artist name')
-
-  // For non-Exportify CSVs with a header, detect which columns are title/artist
-  let titleIdx = 2, artistIdx = 4  // Exportify defaults
-  if (hasHeader && !isExportify) {
-    const headers = splitCSVLine(lines[0]).map(h => h.toLowerCase().replace(/"/g, ''))
-    titleIdx  = headers.findIndex(h => h.includes('title') || h.includes('track') || h.includes('name'))
-    artistIdx = headers.findIndex(h => h.includes('artist'))
-    if (titleIdx === -1)  titleIdx = 0
-    if (artistIdx === -1) artistIdx = 1
+  // Find column indices from header names (works for Exportify and any other CSV)
+  // Exportify headers include: "Track Name", "Artist Name(s)", "Album Image URL"
+  // We look for the most specific match first
+  const findCol = (...terms) => {
+    for (const term of terms) {
+      const idx = headerCols.findIndex(h => h.includes(term))
+      if (idx !== -1) return idx
+    }
+    return -1
   }
+
+  let titleIdx  = hasHeader ? findCol('track name', 'title', 'track', 'name') : -1
+  let artistIdx = hasHeader ? findCol('artist name', 'artist') : -1
+  let artIdx    = hasHeader ? findCol('album image', 'image url', 'artwork', 'cover') : -1
+
+  // Fallback indices if header not found
+  if (titleIdx  === -1) titleIdx  = 0
+  if (artistIdx === -1) artistIdx = 1
 
   const dataLines = hasHeader ? lines.slice(1) : lines
   const tracks = []
@@ -55,28 +63,20 @@ function parseCSV(text) {
     const cols = splitCSVLine(line)
     if (!cols.length) continue
 
-    let title = '', artist = ''
+    let title    = (cols[titleIdx]  || '').trim()
+    let artist   = (cols[artistIdx] || '').trim()
+    let albumArt = artIdx >= 0 ? (cols[artIdx] || '').trim() : ''
 
-    let albumArt = ''
-    if (isExportify && cols.length >= 5) {
-      // Exportify: col 2 = Track Name, col 4 = Artist Name(s), col 13 = Album Image URL
-      title    = cols[2]
-      artist   = cols[4]
-      albumArt = cols.length >= 14 ? cols[13] : ''
-    } else if (cols.length >= 3) {
-      title  = cols[titleIdx] || cols[0]
-      artist = cols[artistIdx] || cols[1]
-    } else if (cols.length === 2) {
-      title = cols[0]; artist = cols[1]
-    } else {
-      // Single column: try "Artist - Title"
+    // Strip Spotify URIs (e.g. "spotify:artist:abc123") — use empty string instead
+    if (artist.startsWith('spotify:')) artist = ''
+    if (albumArt.startsWith('spotify:')) albumArt = ''
+
+    // Single-column fallback: "Artist - Title"
+    if (!title && cols.length === 1) {
       const dash = cols[0].indexOf(' - ')
       if (dash > -1) { artist = cols[0].slice(0, dash); title = cols[0].slice(dash + 3) }
       else title = cols[0]
     }
-
-    // Strip any remaining Spotify URI artifacts just in case
-    if (artist.startsWith('spotify:')) artist = ''
 
     if (title) tracks.push({ id: `${artist}::${title}`, title, artist, albumArt })
   }
@@ -226,7 +226,7 @@ function ExpandingRater({ myVote, onVote }) {
 
 function VerdictChip({ allRatings }) {
   const votes = Object.values(allRatings).filter(Boolean)
-  if (!votes.length) return <span style={{ color: '#252530', fontSize: 11 }}>no votes yet</span>
+  if (!votes.length) return <span style={{ color: '#55526a', fontSize: 11, fontStyle: 'italic' }}>no votes yet</span>
   const v = calcVerdict(allRatings)
   const r = getRating(v)
   const c = { green: 0, yellow: 0, red: 0, rainbow: 0 }
@@ -503,7 +503,7 @@ export default function App() {
       cursor: 'pointer', transition: 'opacity .15s, transform .12s', ...extra,
     }),
     sectionLabel: { fontSize: 9, letterSpacing: 4, color: '#6bcb77', marginBottom: 14, fontWeight: 700, display: 'block' },
-    dimLabel: { fontSize: 9, letterSpacing: 3, color: '#22202e', marginBottom: 2, display: 'block' },
+    dimLabel: { fontSize: 9, letterSpacing: 3, color: '#55526a', marginBottom: 2, display: 'block' },
   }
 
   // ── Boot / error states ────────────────────────────────────────────────────
@@ -685,22 +685,22 @@ export default function App() {
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ marginBottom: 7 }}>
                       <span style={S.dimLabel}>FROM</span>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: '#c8c4d8', display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: '#eeeaf8', display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
                         <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 'calc(100% - 60px)' }}>{t.from.title}</span>
                         {newTrackIds.has(t.from.id) && <NewBadge />}
                       </div>
-                      {t.from.artist && <div style={{ fontSize: 10, color: '#33303f', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.from.artist}</div>}
+                      {t.from.artist && <div style={{ fontSize: 10, color: '#9490aa', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.from.artist}</div>}
                     </div>
 
-                    <div style={{ fontSize: 9, color: '#6bcb7744', letterSpacing: 3, marginBottom: 7 }}>↓ MIX INTO</div>
+                    <div style={{ fontSize: 9, color: '#6bcb77bb', letterSpacing: 3, marginBottom: 7 }}>↓ MIX INTO</div>
 
                     <div style={{ marginBottom: 11 }}>
                       <span style={S.dimLabel}>INTO</span>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: '#c8c4d8', display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: '#eeeaf8', display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
                         <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 'calc(100% - 60px)' }}>{t.to.title}</span>
                         {newTrackIds.has(t.to.id) && <NewBadge />}
                       </div>
-                      {t.to.artist && <div style={{ fontSize: 10, color: '#33303f', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.to.artist}</div>}
+                      {t.to.artist && <div style={{ fontSize: 10, color: '#9490aa', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.to.artist}</div>}
                     </div>
 
                     <VerdictChip allRatings={t.allRatings} />

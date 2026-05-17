@@ -154,6 +154,7 @@ function NewBadge() {
 
 function ExpandingRater({ myVote, onVote }) {
   const [open, setOpen] = useState(false)
+  const [animatingKey, setAnimatingKey] = useState(null)
   const containerRef = useRef(null)
   const active = myVote ? getRating(myVote) : null
 
@@ -173,6 +174,7 @@ function ExpandingRater({ myVote, onVote }) {
 
   const handlePick = (key) => {
     // Only called for non-active buttons — always a fresh vote
+    setAnimatingKey(key)
     onVote(key)
     setOpen(false)
   }
@@ -184,29 +186,37 @@ function ExpandingRater({ myVote, onVote }) {
     setOpen(false)
   }
 
+  const clearAnimation = () => setAnimatingKey(null)
+
   return (
     <div ref={containerRef} style={{ position: 'relative', flexShrink: 0 }}>
 
       {/* ── Trigger button ── */}
-      <button
-        onClick={() => setOpen(o => !o)}
-        title={active ? `Your vote: ${active.label} — tap to change` : 'Tap to rate'}
-        style={{
-          width: 42, height: 42, borderRadius: '50%', border: 'none', cursor: 'pointer',
-          background: active ? (active.isRainbow ? RAINBOW : active.color) : '#1e1c2a',
-          boxShadow: active
-            ? (active.isRainbow ? '0 0 20px 6px #c77dff44' : `0 0 18px 6px ${active.color}66`)
-            : 'inset 0 2px 8px #00000099, 0 0 0 1px #2a2838',
-          transition: 'all 0.2s cubic-bezier(.4,2,.5,1)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          transform: open ? 'scale(1.08)' : 'scale(1)',
-        }}
-      >
-        {active
-          ? <span style={{ fontSize: 17 }}>{active.emoji}</span>
-          : <span style={{ opacity: 0.4, fontSize: 18 }}>☆</span>
-        }
-      </button>
+      <div style={{ position: 'relative' }}>
+        <button
+          onClick={() => setOpen(o => !o)}
+          title={active ? `Your vote: ${active.label} — tap to change` : 'Tap to rate'}
+          style={{
+            width: 42, height: 42, borderRadius: '50%', border: 'none', cursor: 'pointer',
+            background: active ? (active.isRainbow ? RAINBOW : active.color) : '#1e1c2a',
+            boxShadow: active
+              ? (active.isRainbow ? '0 0 20px 6px #c77dff44' : `0 0 18px 6px ${active.color}66`)
+              : 'inset 0 2px 8px #00000099, 0 0 0 1px #2a2838',
+            transition: 'all 0.2s cubic-bezier(.4,2,.5,1)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            transform: open ? 'scale(1.08)' : 'scale(1)',
+          }}
+        >
+          {active
+            ? <span style={{ fontSize: 17 }}>{active.emoji}</span>
+            : <span style={{ opacity: 0.4, fontSize: 18 }}>☆</span>
+          }
+        </button>
+        {/* Vote animation fires from the trigger button position */}
+        {animatingKey && (
+          <VoteAnimation voteKey={animatingKey} onDone={clearAnimation} />
+        )}
+      </div>
 
       {/* ── Expanded panel ── */}
       {open && (

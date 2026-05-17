@@ -620,6 +620,20 @@ export default function App() {
           from { opacity: 0; transform: translateX(-50%) translateY(8px); }
           to   { opacity: 1; transform: translateX(-50%) translateY(0); }
         }
+        @keyframes arrowFlow {
+          0%   { opacity: 0.2; transform: translateX(-6px); }
+          50%  { opacity: 1;   transform: translateX(4px); }
+          100% { opacity: 0.2; transform: translateX(-6px); }
+        }
+        @keyframes arrowFlow2 {
+          0%   { opacity: 0.08; transform: translateX(-6px); }
+          50%  { opacity: 0.45; transform: translateX(4px); }
+          100% { opacity: 0.08; transform: translateX(-6px); }
+        }
+        @keyframes labelPulse {
+          0%, 100% { opacity: 0.6; letter-spacing: 3px; }
+          50%       { opacity: 1;   letter-spacing: 4px; }
+        }
       `}</style>
 
       {/* ── HEADER ── */}
@@ -769,8 +783,16 @@ export default function App() {
                   </div>
                   {/* Arrow */}
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 9, color: '#22202e', letterSpacing: 2, marginBottom: 2 }}>TRANSITION</div>
-                    <div style={{ fontSize: 16, color: '#6bcb7755' }}>→</div>
+                    <div style={{
+                      fontSize: 8, color: '#6bcb77cc', letterSpacing: 3, marginBottom: 5,
+                      fontWeight: 700, textTransform: 'uppercase',
+                      animation: 'labelPulse 2.8s ease-in-out infinite',
+                    }}>TRANSITION</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <span style={{ fontSize: 14, color: '#6bcb77', animation: 'arrowFlow2 1.8s ease-in-out infinite', animationDelay: '0s',   display: 'inline-block' }}>›</span>
+                      <span style={{ fontSize: 14, color: '#6bcb77', animation: 'arrowFlow  1.8s ease-in-out infinite', animationDelay: '0.2s', display: 'inline-block' }}>›</span>
+                      <span style={{ fontSize: 14, color: '#6bcb77', animation: 'arrowFlow2 1.8s ease-in-out infinite', animationDelay: '0.4s', display: 'inline-block' }}>›</span>
+                    </div>
                   </div>
                   {/* TO art */}
                   {t.to.albumArt

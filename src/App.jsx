@@ -78,36 +78,80 @@ function parseCSV(text) {
       else title = cols[0]
     }
 
-  if (title) {
-  const rawSpotify = cols[0]?.trim() || ''
+    if (title) tracks.push({ id: `${artist}::${title}`, title, artist, albumArt })
+  }
 
-  const spotifyId = rawSpotify
-    .replace('spotify:track:', '')
-    .replace('https://open.spotify.com/track/', '')
-    .split('?')[0]
+  return tracks
+}
 
-  tracks.push({
-    id: `${artist}::${title}`,
-    title,
-    artist,
-    albumArt,
-    spotifyId,
-  })
-}
-}
-async function fetchSpotifyArt(trackId) {
+// ─── Album art fetcher (iTunes Search API — no key required) ───────────────
+const _artCache = {}  // in-memory cache: "artist::title" → url | null
+
+async function fetchAlbumArt(title, artist) {
+  const cacheKey = `${artist}::${title}`
+  if (cacheKey in _artCache) return _artCache[cacheKey]
+
   try {
-    const url = `https://open.spotify.com/oembed?url=https://open.spotify.com/track/${trackId}`
-
+    // Build a search term: prefer "artist track" but fall back to title only
+    const term = encodeURIComponent(artist ? `${artist} ${title}` : title)
+    const url = `https://itunes.apple.com/search?term=${term}&media=music&entity=song&limit=3`
     const res = await fetch(url)
-    if (!res.ok) return ''
-
+    if (!res.ok) throw new Error(`iTunes HTTP ${res.status}`)
     const data = await res.json()
 
-    return data.thumbnail_url || ''
-  } catch {
-    return ''
+    // Pick the first result whose track/artist name roughly matches
+    const lTitle  = title.toLowerCase()
+    const lArtist = artist.toLowerCase()
+    let best = null
+
+    for (const r of (data.results || [])) {
+      const rTrack  = (r.trackName  || '').toLowerCase()
+      const rArtist = (r.artistName || '').toLowerCase()
+      // exact or near-match on track name wins immediately
+      if (rTrack.includes(lTitle) || lTitle.includes(rTrack)) {
+        if (!artist || rArtist.includes(lArtist) || lArtist.includes(rArtist)) {
+          best = r.artworkUrl100?.replace('100x100bb', '300x300bb') || r.artworkUrl100 || null
+          break
+        }
+        if (!best) best = r.artworkUrl100?.replace('100x100bb', '300x300bb') || r.artworkUrl100 || null
+      }
+    }
+
+    // Last resort: just take the first result's art
+    if (!best && data.results?.length) {
+      const r = data.results[0]
+      best = r.artworkUrl100?.replace('100x100bb', '300x300bb') || r.artworkUrl100 || null
+    }
+
+    _artCache[cacheKey] = best
+    return best
+  } catch (e) {
+    console.warn('Album art fetch failed for', title, e)
+    _artCache[cacheKey] = null
+    return null
   }
+}
+
+// Fetch art for an array of tracks that are missing it, in parallel (batched)
+async function enrichTracksWithArt(tracks, onProgress) {
+  const missing = tracks.filter(t => !t.albumArt)
+  if (!missing.length) return tracks
+
+  const BATCH = 5  // iTunes rate-limit friendly
+  const results = { ...Object.fromEntries(tracks.map(t => [t.id, t.albumArt])) }
+
+  for (let i = 0; i < missing.length; i += BATCH) {
+    const batch = missing.slice(i, i + BATCH)
+    await Promise.all(batch.map(async t => {
+      const art = await fetchAlbumArt(t.title, t.artist)
+      results[t.id] = art || ''
+    }))
+    if (onProgress) onProgress(Math.min(i + BATCH, missing.length), missing.length)
+    // Small delay between batches to be courteous to iTunes
+    if (i + BATCH < missing.length) await new Promise(r => setTimeout(r, 300))
+  }
+
+  return tracks.map(t => ({ ...t, albumArt: results[t.id] || t.albumArt || '' }))
 }
 
 // ─── Rating config ─────────────────────────────────────────────────────────
@@ -317,6 +361,7 @@ export default function App() {
   const [csvError, setCsvError]       = useState('')
   const [importMsg, setImportMsg]     = useState('')
   const [importing, setImporting]     = useState(false)
+  const [artProgress, setArtProgress] = useState(null)   // null | { done, total }
 
   const [editingPatch, setEditPatch]  = useState(false)
   const [editingRoad, setEditRoad]    = useState(false)
@@ -423,50 +468,48 @@ export default function App() {
 
   // ── CSV Import ────────────────────────────────────────────────────────────
   const handleImport = async () => {
-    setCsvError(''); setImportMsg(''); setImporting(true)
+    setCsvError(''); setImportMsg(''); setImporting(true); setArtProgress(null)
     try {
-const parsed = parseCSV(csvText)
+      const parsed = parseCSV(csvText)
+      if (parsed.length < 2) { setCsvError('Need at least 2 tracks. Check format.'); setImporting(false); return }
 
-if (parsed.length < 2) {
-  setCsvError('Need at least 2 tracks. Check format.')
-  setImporting(false)
-  return
-}
-
-// Fetch Spotify album art automatically
-await Promise.all(parsed.map(async track => {
-  if (!track.albumArt && track.spotifyId) {
-    track.albumArt = await fetchSpotifyArt(track.spotifyId)
-  }
-}))
-
-const oldIds = new Set(tracks.map(t => t.id))
-const addedIds = parsed.map(t => t.id).filter(id => !oldIds.has(id))
-const newVersion = currentVersion + 1
+      const oldIds = new Set(tracks.map(t => t.id))
+      const addedIds = parsed.map(t => t.id).filter(id => !oldIds.has(id))
+      const newVersion = currentVersion + 1
 
       // 1. Snapshot current ratings into history BEFORE changing anything
       await saveHistorySnapshot(ratings, currentVersion)
 
-      // 2. Build new tracks array, preserving addedIn version for existing tracks
-      const newTracks = parsed.map(t => ({
+      // 2. Build new tracks array, preserving addedIn version + any existing art
+      let newTracks = parsed.map(t => ({
         ...t,
         albumArt: t.albumArt || tracks.find(o => o.id === t.id)?.albumArt || '',
         addedIn: addedIds.includes(t.id) ? newVersion : (tracks.find(o => o.id === t.id)?.addedIn || 1),
       }))
 
-      // 3. Persist playlist WITH new_track_ids to Supabase
-      //    This is the key fix: new_track_ids is saved to DB, not just memory
+      // 3. Fetch missing album art via iTunes Search API (no API key needed)
+      const missingArt = newTracks.filter(t => !t.albumArt)
+      if (missingArt.length > 0) {
+        setImportMsg(`\uD83C\uDFA8 Fetching album art for ${missingArt.length} tracks\u2026`)
+        newTracks = await enrichTracksWithArt(newTracks, (done, total) => {
+          setArtProgress({ done, total })
+        })
+        setArtProgress(null)
+      }
+
+      // 4. Persist playlist WITH new_track_ids to Supabase
       await savePlaylist(newTracks, newVersion, addedIds)
 
-      // 4. Update local state
+      // 5. Update local state
       setTracks(newTracks)
       setNewTrackIds(new Set(addedIds))
       setVersion(newVersion)
       setHistory(await getRatingHistory())
 
+      const artFound = newTracks.filter(t => t.albumArt).length
       setCsvText('')
-      setImportMsg(`✓ ${parsed.length} tracks · ${addedIds.length} new · now at v${newVersion}`)
-      setTimeout(() => setImportMsg(''), 8000)
+      setImportMsg(`\u2713 ${parsed.length} tracks \u00B7 ${addedIds.length} new \u00B7 ${artFound} with art \u00B7 v${newVersion}`)
+      setTimeout(() => setImportMsg(''), 10000)
     } catch (err) {
       setCsvError(`Import failed: ${err.message}`)
     }
@@ -665,10 +708,28 @@ const newVersion = currentVersion + 1
               <textarea rows={5} value={csvText} onChange={e => setCsvText(e.target.value)} style={{ ...S.inp, marginBottom: 8 }}
                 placeholder={'Exportify CSV format:\nSpotify ID,Artist(s),Track Name,...\n\nor simple format:\nArtist Name - Track Title'} />
               {csvError && <div style={{ color: '#ff6b6b', fontSize: 11, marginBottom: 8 }}>{csvError}</div>}
-              {importMsg && <div style={{ color: '#6bcb77', fontSize: 11, marginBottom: 8 }}>{importMsg}</div>}
+              {importMsg && (
+                <div style={{ color: artProgress ? '#ffd93d' : '#6bcb77', fontSize: 11, marginBottom: 8 }}>
+                  {importMsg}
+                  {artProgress && (
+                    <div style={{ marginTop: 6 }}>
+                      <div style={{ height: 4, background: '#16151f', borderRadius: 2, overflow: 'hidden' }}>
+                        <div style={{
+                          height: '100%', borderRadius: 2, background: '#ffd93d',
+                          width: `${Math.round((artProgress.done / artProgress.total) * 100)}%`,
+                          transition: 'width .3s ease',
+                        }} />
+                      </div>
+                      <div style={{ fontSize: 9, color: '#555', marginTop: 3, letterSpacing: 1 }}>
+                        {artProgress.done}/{artProgress.total} TRACKS
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
               <button onClick={handleImport} disabled={!csvText.trim() || importing}
                 style={{ ...S.btn('#6bcb77', '#000'), width: '100%', opacity: csvText.trim() && !importing ? 1 : 0.35 }}>
-                {importing ? 'IMPORTING...' : 'IMPORT & UPDATE'}
+                {importing ? (artProgress ? 'FETCHING ART...' : 'IMPORTING...') : 'IMPORT & UPDATE'}
               </button>
             </div>
           )}

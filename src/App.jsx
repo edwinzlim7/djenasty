@@ -152,6 +152,44 @@ function NewBadge() {
   )
 }
 
+// ─── Vote animation — bursts emoji upward from the button, then fades ────────
+function VoteAnimation({ voteKey, onDone }) {
+  const r = getRating(voteKey)
+  if (!r) return null
+
+  const particles = [
+    { emoji: r.emoji,  x: 0,   delay: 0    },
+    { emoji: r.emoji,  x: -18, delay: 0.08 },
+    { emoji: r.emoji,  x: 18,  delay: 0.12 },
+  ]
+
+  return (
+    <div style={{
+      position: 'absolute', bottom: '110%', left: '50%',
+      transform: 'translateX(-50%)',
+      pointerEvents: 'none', zIndex: 200,
+    }}>
+      {particles.map((p, i) => (
+        <span
+          key={i}
+          onAnimationEnd={i === 0 ? onDone : undefined}
+          style={{
+            position: 'absolute',
+            fontSize: 18,
+            left: p.x,
+            bottom: 0,
+            animation: `voteFloat 0.75s cubic-bezier(.2,.8,.4,1) ${p.delay}s both`,
+            display: 'inline-block',
+            filter: r.isRainbow ? 'drop-shadow(0 0 6px #c77dff)' : `drop-shadow(0 0 4px ${r.color})`,
+          }}
+        >
+          {p.emoji}
+        </span>
+      ))}
+    </div>
+  )
+}
+
 function ExpandingRater({ myVote, onVote }) {
   const [open, setOpen] = useState(false)
   const [animatingKey, setAnimatingKey] = useState(null)
@@ -666,6 +704,11 @@ export default function App() {
         @keyframes fanIn {
           from { opacity: 0; transform: translateX(-50%) translateY(8px); }
           to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+        }
+        @keyframes voteFloat {
+          0%   { opacity: 1;   transform: translateY(0)     scale(1); }
+          60%  { opacity: 1;   transform: translateY(-38px) scale(1.25); }
+          100% { opacity: 0;   transform: translateY(-60px) scale(0.8); }
         }
         @keyframes flowDot {
           0%   { opacity: 0.15; transform: translateX(-6px); }

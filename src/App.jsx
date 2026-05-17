@@ -3,7 +3,7 @@ import {
   getPlaylist, savePlaylist,
   getAllRatings, upsertRating, deleteRating, deleteAllRatings,
   getRatingHistory, saveHistorySnapshot,
-  getPatchNotes, addPatchNote, deletePatchNote,
+  getPatchNotes, addPatchNote, deletePatchNote, updatePatchNote,
   getRoadmap, addRoadmapItems, toggleRoadmapItem, deleteRoadmapItem,
   subscribeToRatings, subscribeToPlaylist,
 } from './db.js'
@@ -371,6 +371,8 @@ export default function App() {
   const [editingPatch, setEditPatch]  = useState(false)
   const [editingRoad, setEditRoad]    = useState(false)
   const [patchDraft, setPatchDraft]   = useState('')
+  const [editingNoteId, setEditingNoteId] = useState(null)  // id of note being edited
+  const [editNoteDraft, setEditNoteDraft] = useState('')
   const [roadDraft, setRoadDraft]     = useState('')
 
   const fileRef = useRef()
@@ -554,6 +556,20 @@ export default function App() {
   }
   const handleDeletePatch = async (id) => {
     await deletePatchNote(id); setPatchNotes(await getPatchNotes())
+  }
+  const startEditNote = (note) => {
+    setEditingNoteId(note.id)
+    setEditNoteDraft((note.notes || []).join('\n'))
+  }
+  const cancelEditNote = () => {
+    setEditingNoteId(null); setEditNoteDraft('')
+  }
+  const saveEditedPatch = async (id) => {
+    const lines = editNoteDraft.split('\n').map(l => l.trim()).filter(Boolean)
+    if (!lines.length) return
+    await updatePatchNote(id, lines)
+    setPatchNotes(await getPatchNotes())
+    setEditingNoteId(null); setEditNoteDraft('')
   }
 
   // ── Roadmap ───────────────────────────────────────────────────────────────
@@ -1085,25 +1101,67 @@ export default function App() {
               <div style={{ fontSize: 30, marginBottom: 10 }}>📋</div>
               <div style={{ color: '#252530', fontSize: 12 }}>No patch notes yet.</div>
             </div>
-          ) : patchNotes.map(note => (
-            <div key={note.id} style={{ ...S.card({ marginBottom: 12 }) }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
-                <div>
-                  <span style={{ fontFamily: "'Playfair Display',serif", fontWeight: 700, fontSize: 20, color: '#6bcb77' }}>v{note.version}</span>
-                  <span style={{ fontSize: 10, color: '#252530', marginLeft: 10, letterSpacing: 1 }}>{note.note_date}</span>
-                </div>
-                {djMode && <button onClick={() => handleDeletePatch(note.id)} style={{ background: 'none', border: 'none', color: '#252530', cursor: 'pointer', fontSize: 16 }}>×</button>}
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {(note.notes || []).map((n, i) => (
-                  <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-                    <span style={{ color: '#6bcb7766', fontSize: 10, marginTop: 2, flexShrink: 0 }}>–</span>
-                    <span style={{ fontSize: 12, color: '#7a788a', lineHeight: 1.7 }}>{n}</span>
+          ) : patchNotes.map(note => {
+            const isEditing = editingNoteId === note.id
+            return (
+              <div key={note.id} style={{ ...S.card({ marginBottom: 12, border: isEditing ? '1px solid #6bcb7740' : '1px solid #16151f' }) }}>
+                {/* Header row */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
+                  <div>
+                    <span style={{ fontFamily: "'Playfair Display',serif", fontWeight: 700, fontSize: 20, color: '#6bcb77' }}>v{note.version}</span>
+                    <span style={{ fontSize: 10, color: '#7870a8', marginLeft: 10, letterSpacing: 1 }}>{note.note_date}</span>
                   </div>
-                ))}
+                  {djMode && (
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                      {!isEditing ? (
+                        <>
+                          <button
+                            onClick={() => startEditNote(note)}
+                            style={{ background: '#1e1c2a', border: '1px solid #3a3560', color: '#9490aa', fontSize: 10, cursor: 'pointer', fontFamily: 'inherit', borderRadius: 8, padding: '4px 10px' }}
+                            onMouseEnter={e => { e.currentTarget.style.color = '#c8c4d8'; e.currentTarget.style.borderColor = '#6bcb7766' }}
+                            onMouseLeave={e => { e.currentTarget.style.color = '#9490aa'; e.currentTarget.style.borderColor = '#3a3560' }}
+                          >edit</button>
+                          <button onClick={() => handleDeletePatch(note.id)} style={{ background: 'none', border: 'none', color: '#3a3560', cursor: 'pointer', fontSize: 16, lineHeight: 1 }}
+                            onMouseEnter={e => e.currentTarget.style.color = '#ff6b6b'}
+                            onMouseLeave={e => e.currentTarget.style.color = '#3a3560'}
+                          >×</button>
+                        </>
+                      ) : (
+                        <>
+                          <button onClick={() => saveEditedPatch(note.id)} style={{ ...S.btn('#6bcb77', '#000'), fontSize: 10, padding: '5px 12px' }}>save</button>
+                          <button onClick={cancelEditNote} style={{ ...S.btn('#1e1c2a', '#9490aa'), fontSize: 10, padding: '5px 12px' }}>cancel</button>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Edit mode — textarea */}
+                {isEditing ? (
+                  <textarea
+                    rows={Math.max(3, (note.notes || []).length + 1)}
+                    value={editNoteDraft}
+                    onChange={e => setEditNoteDraft(e.target.value)}
+                    style={{ ...S.inp }}
+                    placeholder={'One change per line:
+– Added Bicep track after the intro
+– Swapped tracks 6 & 7'}
+                    autoFocus
+                  />
+                ) : (
+                  /* Read mode — list of notes */
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {(note.notes || []).map((n, i) => (
+                      <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                        <span style={{ color: '#6bcb7766', fontSize: 10, marginTop: 2, flexShrink: 0 }}>–</span>
+                        <span style={{ fontSize: 12, color: '#7a788a', lineHeight: 1.7 }}>{n}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
 

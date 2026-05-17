@@ -129,6 +129,14 @@ export async function deletePatchNote(id) {
   if (error) { console.error('deletePatchNote error:', error.message); throw error }
 }
 
+export async function updatePatchNote(id, notes) {
+  const { error } = await supabase
+    .from('patch_notes')
+    .update({ notes })
+    .eq('id', id)
+  if (error) { console.error('updatePatchNote error:', error.message); throw error }
+}
+
 // ─── Roadmap ───────────────────────────────────────────────────────────────
 export async function getRoadmap() {
   const { data, error } = await supabase

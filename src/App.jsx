@@ -6,6 +6,7 @@ import {
   getPatchNotes, addPatchNote, deletePatchNote, updatePatchNote,
   getRoadmap, addRoadmapItems, toggleRoadmapItem, deleteRoadmapItem,
   subscribeToRatings, subscribeToPlaylist,
+  getComments, upsertComment, deleteComment, subscribeToComments,
 } from './db.js'
 
 // ─── Config ────────────────────────────────────────────────────────────────
@@ -440,6 +441,10 @@ export default function App() {
   const [ratingHistory, setHistory]   = useState({})
   const [patchNotes, setPatchNotes]   = useState([])
   const [roadmap, setRoadmap]         = useState([])
+  const [comments, setComments]       = useState({}) // { [transition_key]: [{id, user_name, text, updated_at}] }
+  const [openComments, setOpenComments] = useState({}) // { [transition_key]: true } — which cards are expanded
+  const [commentDrafts, setCommentDrafts] = useState({}) // { [transition_key]: string }
+  const [commentSaving, setCommentSaving] = useState({}) // { [transition_key]: true } — loading state
 
   const [userName, setUserName]       = useState(() => localStorage.getItem('djenasty-name') || '')
   const [nameInput, setNameInput]     = useState('')
@@ -471,12 +476,13 @@ export default function App() {
   useEffect(() => {
     ;(async () => {
       try {
-        const [pl, allR, hist, pn, rm] = await Promise.all([
+        const [pl, allR, hist, pn, rm, cm] = await Promise.all([
           getPlaylist(),
           getAllRatings(),
           getRatingHistory(),
           getPatchNotes(),
           getRoadmap(),
+          getComments(),
         ])
 
         if (pl) {
@@ -489,6 +495,7 @@ export default function App() {
         setHistory(hist)
         setPatchNotes(pn)
         setRoadmap(rm)
+        setComments(cm)
       } catch (err) {
         setBootError('Could not connect to Supabase. Check your .env credentials.')
         console.error('Boot error:', err)
@@ -534,6 +541,30 @@ export default function App() {
     })
 
     return () => { unsubRatings(); unsubPlaylist() }
+  }, [booted])
+
+  // ── Realtime: live comment updates ────────────────────────────────────────
+  useEffect(() => {
+    if (!booted) return
+    const unsubComments = subscribeToComments({
+      onInsert: row => setComments(prev => {
+        const list = [...(prev[row.transition_key] || []).filter(c => c.id !== row.id), row]
+        return { ...prev, [row.transition_key]: list }
+      }),
+      onUpdate: row => setComments(prev => {
+        const list = (prev[row.transition_key] || []).map(c => c.id === row.id ? row : c)
+        return { ...prev, [row.transition_key]: list }
+      }),
+      onDelete: row => setComments(prev => {
+        const list = (prev[row.transition_key] || []).filter(c => !(c.user_name === row.user_name))
+        return { ...prev, [row.transition_key]: list }
+      }),
+      onRefreshNeeded: async () => {
+        const fresh = await getComments()
+        setComments(fresh)
+      },
+    })
+    return () => unsubComments()
   }, [booted])
 
   // ── Persist user name locally ─────────────────────────────────────────────
@@ -585,6 +616,43 @@ export default function App() {
       // Revert optimistic update on error by reloading from DB
       const fresh = await getAllRatings()
       setRatings(fresh)
+    }
+  }
+
+  // ── Comments ──────────────────────────────────────────────────────────────
+  const toggleComments = (key) => {
+    setOpenComments(prev => ({ ...prev, [key]: !prev[key] }))
+  }
+
+  const handleSaveComment = async (key) => {
+    if (!userName) { setNameModal(true); return }
+    const text = (commentDrafts[key] || '').trim()
+    if (!text) return
+    setCommentSaving(prev => ({ ...prev, [key]: true }))
+    try {
+      const saved = await upsertComment(key, userName, text)
+      // Optimistic: update local state immediately (realtime will also fire)
+      setComments(prev => {
+        const list = [...(prev[key] || []).filter(c => c.user_name !== userName), saved]
+        return { ...prev, [key]: list }
+      })
+      setCommentDrafts(prev => ({ ...prev, [key]: '' }))
+    } catch (err) {
+      console.error('Save comment failed:', err)
+    }
+    setCommentSaving(prev => ({ ...prev, [key]: false }))
+  }
+
+  const handleDeleteComment = async (key) => {
+    try {
+      await deleteComment(key, userName)
+      setComments(prev => {
+        const list = (prev[key] || []).filter(c => c.user_name !== userName)
+        return { ...prev, [key]: list }
+      })
+      setCommentDrafts(prev => ({ ...prev, [key]: '' }))
+    } catch (err) {
+      console.error('Delete comment failed:', err)
     }
   }
 
@@ -786,6 +854,10 @@ export default function App() {
           0%   { opacity: 0.15; transform: translateX(-6px); }
           50%  { opacity: 1;    transform: translateX(0px);  }
           100% { opacity: 0.15; transform: translateX(6px);  }
+        }
+        @keyframes slideDown {
+          from { opacity: 0; transform: translateY(-6px); }
+          to   { opacity: 1; transform: translateY(0); }
         }
       `}</style>
 
@@ -1043,6 +1115,118 @@ export default function App() {
                     </div>
 
                     <VerdictChip allRatings={t.allRatings} />
+
+                    {/* ── Comments toggle ── */}
+                    {(() => {
+                      const cardComments = comments[t.key] || []
+                      const myComment = cardComments.find(c => c.user_name === userName)
+                      const isOpen = !!openComments[t.key]
+                      const draft = commentDrafts[t.key] || ''
+                      const saving = !!commentSaving[t.key]
+                      return (
+                        <div style={{ marginTop: 10 }}>
+                          {/* Toggle button */}
+                          <button
+                            onClick={() => toggleComments(t.key)}
+                            style={{
+                              background: 'none', border: 'none', cursor: 'pointer',
+                              fontFamily: "'Inconsolata',monospace", padding: 0,
+                              display: 'flex', alignItems: 'center', gap: 6,
+                            }}
+                          >
+                            <span style={{ fontSize: 10, color: isOpen ? '#9490aa' : '#55526a', letterSpacing: 1.5, transition: 'color .15s' }}>
+                              💬 {cardComments.length > 0 ? `${cardComments.length} COMMENT${cardComments.length !== 1 ? 'S' : ''}` : 'ADD COMMENT'}
+                            </span>
+                            {cardComments.length > 0 && (
+                              <span style={{ fontSize: 9, color: '#3a3560' }}>{isOpen ? '▲' : '▼'}</span>
+                            )}
+                          </button>
+
+                          {/* Expanded comment section */}
+                          {isOpen && (
+                            <div style={{ marginTop: 10, animation: 'slideDown .15s ease-out' }}>
+                              {/* Existing comments */}
+                              {cardComments.length > 0 && (
+                                <div style={{ marginBottom: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                  {cardComments.map(c => {
+                                    const rv = getRating(t.allRatings[c.user_name])
+                                    const isMe = c.user_name === userName
+                                    return (
+                                      <div key={c.user_name} style={{
+                                        background: isMe ? '#13111e' : '#0f0e17',
+                                        border: `1px solid ${isMe ? '#3a356088' : '#18172a'}`,
+                                        borderRadius: 9, padding: '8px 11px',
+                                      }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                                          {rv && <span style={{ fontSize: 11 }}>{rv.emoji}</span>}
+                                          <span style={{ fontSize: 10, fontWeight: 700, color: isMe ? '#9490aa' : '#55526a', letterSpacing: 0.5 }}>
+                                            {c.user_name}{isMe ? ' (you)' : ''}
+                                          </span>
+                                          <span style={{ fontSize: 9, color: '#252530', marginLeft: 'auto' }}>
+                                            {new Date(c.updated_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
+                                          </span>
+                                        </div>
+                                        <div style={{ fontSize: 12, color: isMe ? '#b8b4cc' : '#7a788a', lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                                          {c.text}
+                                        </div>
+                                      </div>
+                                    )
+                                  })}
+                                </div>
+                              )}
+
+                              {/* Input area — pre-fill with existing comment if editing */}
+                              {userName ? (
+                                <div>
+                                  {myComment && !draft && (
+                                    <div style={{ fontSize: 10, color: '#3a3560', marginBottom: 6, letterSpacing: 0.5 }}>
+                                      Edit your comment below or{' '}
+                                      <button onClick={() => handleDeleteComment(t.key)}
+                                        style={{ background: 'none', border: 'none', color: '#ff6b6b55', cursor: 'pointer', fontFamily: 'inherit', fontSize: 10, padding: 0, textDecoration: 'underline' }}>
+                                        delete it
+                                      </button>
+                                    </div>
+                                  )}
+                                  <textarea
+                                    rows={2}
+                                    placeholder={myComment ? myComment.text : 'Share your thoughts on this transition…'}
+                                    value={draft}
+                                    onChange={e => setCommentDrafts(prev => ({ ...prev, [t.key]: e.target.value }))}
+                                    onKeyDown={e => {
+                                      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSaveComment(t.key) }
+                                    }}
+                                    style={{
+                                      ...S.inp, fontSize: 12, marginBottom: 6,
+                                      borderColor: draft ? '#3a356088' : '#18172a',
+                                    }}
+                                  />
+                                  <div style={{ display: 'flex', gap: 6 }}>
+                                    <button
+                                      onClick={() => handleSaveComment(t.key)}
+                                      disabled={!draft.trim() || saving}
+                                      style={{ ...S.btn('#6bcb77', '#000'), fontSize: 10, padding: '7px 14px', opacity: draft.trim() && !saving ? 1 : 0.35 }}
+                                    >
+                                      {saving ? '...' : myComment ? 'UPDATE' : 'POST'}
+                                    </button>
+                                    {draft && (
+                                      <button onClick={() => setCommentDrafts(prev => ({ ...prev, [t.key]: '' }))}
+                                        style={{ ...S.btn('#16151f', '#555'), fontSize: 10, padding: '7px 14px' }}>
+                                        CLEAR
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                              ) : (
+                                <button onClick={() => setNameModal(true)}
+                                  style={{ ...S.btn('#16151f', '#555'), fontSize: 10, padding: '7px 14px' }}>
+                                  SET NAME TO COMMENT
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })()}
 
                     {djMode && Object.keys(t.history).length > 0 && (
                       <div style={{ marginTop: 9, display: 'flex', gap: 5, flexWrap: 'wrap' }}>

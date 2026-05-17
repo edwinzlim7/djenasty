@@ -171,6 +171,64 @@ export async function deleteRoadmapItem(id) {
   if (error) { console.error('deleteRoadmapItem error:', error.message); throw error }
 }
 
+// ─── Comments ──────────────────────────────────────────────────────────────
+export async function getComments() {
+  const { data, error } = await supabase
+    .from('comments')
+    .select('*')
+    .order('created_at', { ascending: true })
+  if (error) { console.error('getComments error:', error.message); return {} }
+  const map = {}
+  for (const row of data || []) {
+    if (!map[row.transition_key]) map[row.transition_key] = []
+    map[row.transition_key].push(row)
+  }
+  return map
+}
+
+export async function upsertComment(transitionKey, userName, text) {
+  // One comment per user per transition — upsert on (transition_key, user_name)
+  const { data, error } = await supabase
+    .from('comments')
+    .upsert(
+      { transition_key: transitionKey, user_name: userName, text, updated_at: new Date().toISOString() },
+      { onConflict: 'transition_key,user_name' }
+    )
+    .select()
+    .single()
+  if (error) { console.error('upsertComment error:', error.message); throw error }
+  return data
+}
+
+export async function deleteComment(transitionKey, userName) {
+  const { data, error } = await supabase
+    .from('comments')
+    .delete()
+    .eq('transition_key', transitionKey)
+    .eq('user_name', userName)
+    .select()
+  if (error) { console.error('deleteComment error:', error.message); throw error }
+  return data
+}
+
+export function subscribeToComments({ onInsert, onUpdate, onDelete, onRefreshNeeded }) {
+  const channel = supabase
+    .channel('comments-live')
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'comments' },
+      (payload) => onInsert?.(payload.new))
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'comments' },
+      (payload) => onUpdate?.(payload.new))
+    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'comments' }, (payload) => {
+      if (payload.old?.transition_key && payload.old?.user_name) {
+        onDelete?.(payload.old)
+      } else {
+        onRefreshNeeded?.()
+      }
+    })
+    .subscribe()
+  return () => supabase.removeChannel(channel)
+}
+
 // ─── Realtime ─────────────────────────────────────────────────────────────
 // IMPORTANT: DELETE events only carry full row data if you have run:
 //   ALTER TABLE ratings REPLICA IDENTITY FULL;

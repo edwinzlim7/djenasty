@@ -116,7 +116,7 @@ function buildAnalytics(transitions, ratings, ratingHistory) {
     const c = { green: 0, yellow: 0, red: 0, rainbow: 0 }
     votes.forEach(v => { if (c[v] !== undefined) c[v]++ })
     const total = votes.length
-    const score = total ? (c.green * 3 + c.yellow * 2 + c.rainbow * 4) / (total * 4) : null
+    const score = total ? (c.rainbow * 3 + c.green * 2 + c.yellow * 1 + c.red * 0) / total : null
     return { ...t, counts: c, total, score, verdict: calcVerdict(t.allRatings) }
   })
 
@@ -137,8 +137,9 @@ function buildAnalytics(transitions, ratings, ratingHistory) {
 
   // Participation per transition
   const avgVotesPerTransition = voted.length ? (voted.reduce((sum, s) => sum + s.total, 0) / voted.length).toFixed(1) : 0
+  const avgScore = voted.length ? (voted.reduce((sum, s) => sum + (s.score ?? 0), 0) / voted.length).toFixed(2) : '—'
 
-  return { stats, totalVotes, totalVoters, globalCounts, best, worst, elites, avgVotesPerTransition, voted }
+  return { stats, totalVotes, totalVoters, globalCounts, best, worst, elites, avgVotesPerTransition, avgScore, voted }
 }
 
 // ─── Small UI components ────────────────────────────────────────────────────
@@ -425,7 +426,7 @@ function MiniBar({ value, max, color }) {
   )
 }
 
-const TABS = ['RATE', 'ANALYTICS', 'PATCH NOTES', 'ROADMAP']
+const TABS = ['RATE', 'ANALYTICS', 'FRIENDS & FAMILY', 'PATCH NOTES', 'ROADMAP']
 
 // ─── App ───────────────────────────────────────────────────────────────────
 export default function App() {
@@ -460,6 +461,9 @@ export default function App() {
   const [editingNoteId, setEditingNoteId] = useState(null)  // id of note being edited
   const [editNoteDraft, setEditNoteDraft] = useState('')
   const [roadDraft, setRoadDraft]     = useState('')
+
+  const [searchQuery, setSearchQuery]   = useState('')
+  const [selectedFriend, setFriend]     = useState(null)
 
   const fileRef = useRef()
 
@@ -678,6 +682,21 @@ export default function App() {
   // ── Analytics ─────────────────────────────────────────────────────────────
   const analytics = buildAnalytics(transitions, ratings, ratingHistory)
 
+  // ── Search: find transitions involving a song name ─────────────────────────
+  const searchResults = searchQuery.trim().length >= 2
+    ? transitions.filter(t =>
+        t.from.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        t.to.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        t.from.artist.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        t.to.artist.toLowerCase().includes(searchQuery.toLowerCase())
+      )
+    : []
+
+  // ── Friends: all voters derived from ratings ───────────────────────────────
+  const allVoters = [...new Set(
+    Object.values(ratings).flatMap(r => Object.keys(r))
+  )].sort()
+
   // ── Styles ────────────────────────────────────────────────────────────────
   const S = {
     page: {
@@ -841,6 +860,81 @@ export default function App() {
       {/* ══════════════════════════════ TAB: RATE ══════════════════════════════ */}
       {tab === 'RATE' && (
         <div style={{ width: '100%', maxWidth: 560 }}>
+
+          {/* Search bar */}
+          {tracks.length > 0 && (
+            <div style={{ marginBottom: 16, position: 'relative' }}>
+              <input
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                placeholder="🔍  Search for a song or artist..."
+                style={{ ...S.inp, paddingLeft: 14 }}
+              />
+              {searchQuery && (
+                <button onClick={() => setSearchQuery('')} style={{
+                  position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)',
+                  background: 'none', border: 'none', color: '#555', cursor: 'pointer', fontSize: 16, lineHeight: 1,
+                }}>×</button>
+              )}
+            </div>
+          )}
+
+          {/* Search results */}
+          {searchQuery.trim().length >= 2 && (
+            <div style={{ ...S.card({ marginBottom: 16, border: '1px solid #6bcb7720' }) }}>
+              <span style={S.sectionLabel}>SEARCH RESULTS · {searchResults.length} TRANSITION{searchResults.length !== 1 ? 'S' : ''}</span>
+              {searchResults.length === 0 ? (
+                <div style={{ color: '#252530', fontSize: 12 }}>No transitions found for "{searchQuery}"</div>
+              ) : (
+                searchResults.map(t => (
+                  <div key={t.key} style={{
+                    background: '#0c0b12', border: `1.5px solid ${t.myVote ? (getRating(t.myVote)?.color || '#fff') + '44' : '#16151f'}`,
+                    borderRadius: 12, padding: '12px 14px', marginBottom: 8,
+                  }}>
+                    {/* Album art mini row */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                      {t.from.albumArt
+                        ? <img src={t.from.albumArt} alt="" style={{ width: 36, height: 36, borderRadius: 6, objectFit: 'cover', flexShrink: 0 }} />
+                        : <div style={{ width: 36, height: 36, borderRadius: 6, background: '#18181f', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, flexShrink: 0 }}>🎵</div>
+                      }
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 7, color: '#6bcb77cc', letterSpacing: 3, marginBottom: 4, fontWeight: 700 }}>TRANSITION</div>
+                        <div style={{ display: 'flex', gap: 1 }}>
+                          <span style={{ fontSize: 12, color: '#6bcb77' }}>›</span>
+                          <span style={{ fontSize: 12, color: '#6bcb77' }}>›</span>
+                          <span style={{ fontSize: 12, color: '#6bcb77' }}>›</span>
+                        </div>
+                      </div>
+                      {t.to.albumArt
+                        ? <img src={t.to.albumArt} alt="" style={{ width: 36, height: 36, borderRadius: 6, objectFit: 'cover', flexShrink: 0 }} />
+                        : <div style={{ width: 36, height: 36, borderRadius: 6, background: '#18181f', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, flexShrink: 0 }}>🎵</div>
+                      }
+                    </div>
+                    <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ marginBottom: 5 }}>
+                          <span style={S.dimLabel}>FROM</span>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: '#eeeaf8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.from.title}</div>
+                          <div style={{ fontSize: 10, color: '#55526a' }}>{t.from.artist}</div>
+                        </div>
+                        <div>
+                          <span style={S.dimLabel}>TO</span>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: '#eeeaf8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.to.title}</div>
+                          <div style={{ fontSize: 10, color: '#55526a' }}>{t.to.artist}</div>
+                        </div>
+                        <div style={{ marginTop: 8 }}>
+                          <VerdictChip allRatings={t.allRatings} />
+                        </div>
+                      </div>
+                      <div style={{ paddingTop: 2, flexShrink: 0 }}>
+                        <ExpandingRater myVote={t.myVote} onVote={(key) => handleVote(t.index, key)} />
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
 
           {/* DJ Import Panel */}
           {djMode && (
@@ -1047,11 +1141,12 @@ export default function App() {
                 {[
                   { label: 'TOTAL VOTES', value: analytics.totalVotes, color: '#6bcb77' },
                   { label: 'VOTERS', value: analytics.totalVoters, color: '#c77dff' },
-                  { label: 'AVG / TRANSITION', value: analytics.avgVotesPerTransition, color: '#ffd93d' },
+                  { label: 'AVG SCORE', value: analytics.avgScore, color: '#ffd93d', sub: 'out of 3' },
                 ].map(s => (
                   <div key={s.label} style={{ textAlign: 'center', background: '#13111e', borderRadius: 10, padding: '16px 8px', border: `1px solid ${s.color}33` }}>
                     <div style={{ fontSize: 26, fontWeight: 900, color: s.color, fontFamily: "'Playfair Display',serif", lineHeight: 1 }}>{s.value}</div>
                     <div style={{ fontSize: 8, letterSpacing: 2, color: '#7870a8', marginTop: 6 }}>{s.label}</div>
+                    {s.sub && <div style={{ fontSize: 7, letterSpacing: 1, color: '#3a3850', marginTop: 2 }}>{s.sub}</div>}
                   </div>
                 ))}
               </div>
@@ -1075,10 +1170,10 @@ export default function App() {
             <div style={{ ...S.card({ marginBottom: 12 }) }}>
               <span style={S.sectionLabel}>VERDICT BREAKDOWN</span>
               {[
+                { label: 'ELITE', color: '#c77dff', key: 'rainbow' },
                 { label: 'KEEP (Fire)', color: '#6bcb77', key: 'green' },
                 { label: 'MAYBE (Solid)', color: '#ffd93d', key: 'yellow' },
                 { label: 'CHANGE (Drop it)', color: '#ff6b6b', key: 'red' },
-                { label: 'ELITE', color: '#c77dff', key: 'rainbow' },
               ].map(({ label, color, key }) => {
                 const count = analytics.voted.filter(t => t.verdict === key).length
                 return (
@@ -1126,7 +1221,10 @@ export default function App() {
                     </div>
                     <div style={{ fontSize: 10, color: '#333' }}>{t.total} vote{t.total !== 1 ? 's' : ''}</div>
                   </div>
-                  <VerdictChip allRatings={t.allRatings} />
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, flexShrink: 0, marginLeft: 8 }}>
+                    {t.score !== null && <span style={{ fontSize: 15, fontWeight: 700, color: '#6bcb77', fontFamily: "'Playfair Display',serif" }}>{t.score.toFixed(2)}</span>}
+                    <VerdictChip allRatings={t.allRatings} />
+                  </div>
                 </div>
               ))}
             </div>
@@ -1142,23 +1240,32 @@ export default function App() {
                     </div>
                     <div style={{ fontSize: 10, color: '#333' }}>{t.total} vote{t.total !== 1 ? 's' : ''}</div>
                   </div>
-                  <VerdictChip allRatings={t.allRatings} />
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, flexShrink: 0, marginLeft: 8 }}>
+                    {t.score !== null && <span style={{ fontSize: 15, fontWeight: 700, color: '#ff6b6b', fontFamily: "'Playfair Display',serif" }}>{t.score.toFixed(2)}</span>}
+                    <VerdictChip allRatings={t.allRatings} />
+                  </div>
                 </div>
               ))}
             </div>
 
-            {/* Full transition table */}
+            {/* Full transition table — sorted by score descending */}
             <div style={S.card()}>
-              <span style={S.sectionLabel}>ALL TRANSITIONS</span>
-              {analytics.stats.map((t, i) => {
+              <span style={S.sectionLabel}>ALL TRANSITIONS · RANKED BY SCORE</span>
+              {[...analytics.stats]
+                .sort((a, b) => (b.score ?? -1) - (a.score ?? -1))
+                .map((t, i) => {
                 const v = t.verdict ? getRating(t.verdict) : null
+                const scoreStr = t.score !== null ? t.score.toFixed(2) : '—'
                 return (
-                  <div key={t.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '7px 0', borderBottom: i < analytics.stats.length - 1 ? '1px solid #10101a' : 'none' }}>
+                  <div key={t.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: i < analytics.stats.length - 1 ? '1px solid #10101a' : 'none' }}>
                     <div style={{ minWidth: 0, flex: 1 }}>
-                      <div style={{ fontSize: 11, color: '#555', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {i + 1}. {t.from.title} → {t.to.title}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+                        <span style={{ fontSize: 9, color: '#2e2c3e', letterSpacing: 1, flexShrink: 0 }}>#{i + 1}</span>
+                        <span style={{ fontSize: 11, color: '#555', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {t.from.title} → {t.to.title}
+                        </span>
                       </div>
-                      <div style={{ fontSize: 9, color: '#252530', display: 'flex', gap: 8, marginTop: 2 }}>
+                      <div style={{ fontSize: 9, color: '#252530', display: 'flex', gap: 8, marginTop: 1 }}>
                         {t.counts.rainbow > 0 && <span>🌈{t.counts.rainbow}</span>}
                         {t.counts.green > 0 && <span style={{ color: '#6bcb7766' }}>🟢{t.counts.green}</span>}
                         {t.counts.yellow > 0 && <span style={{ color: '#ffd93d66' }}>🟡{t.counts.yellow}</span>}
@@ -1166,15 +1273,178 @@ export default function App() {
                         {t.total === 0 && <span>no votes</span>}
                       </div>
                     </div>
-                    {v && (v.isRainbow
-                      ? <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: 2, background: RAINBOW, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', flexShrink: 0 }}>ELITE</span>
-                      : <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: 2, color: v.color, flexShrink: 0 }}>{v.label.toUpperCase()}</span>
-                    )}
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3, flexShrink: 0, marginLeft: 8 }}>
+                      {t.score !== null && (
+                        <span style={{ fontSize: 13, fontWeight: 700, color: v?.isRainbow ? '#c77dff' : (v?.color || '#555'), fontFamily: "'Playfair Display',serif" }}>
+                          {scoreStr}
+                        </span>
+                      )}
+                      {v && (v.isRainbow
+                        ? <span style={{ fontSize: 8, fontWeight: 700, letterSpacing: 1.5, background: RAINBOW, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>ELITE</span>
+                        : <span style={{ fontSize: 8, fontWeight: 700, letterSpacing: 1.5, color: v.color }}>{v.label.toUpperCase()}</span>
+                      )}
+                    </div>
                   </div>
                 )
               })}
             </div>
           </>)}
+        </div>
+      )}
+
+      {/* ══════════════════════════════ TAB: FRIENDS & FAMILY ═══════════════════ */}
+      {tab === 'FRIENDS & FAMILY' && (
+        <div style={{ width: '100%', maxWidth: 560 }}>
+          {allVoters.length === 0 ? (
+            <div style={{ ...S.card({ textAlign: 'center', padding: '52px 24px' }) }}>
+              <div style={{ fontSize: 30, marginBottom: 10 }}>👥</div>
+              <div style={{ color: '#252530', fontSize: 12 }}>No votes yet. Share the link so friends can rate!</div>
+            </div>
+          ) : (
+            <>
+              {/* Voter list */}
+              {!selectedFriend && (
+                <div style={{ ...S.card({ marginBottom: 12 }) }}>
+                  <span style={S.sectionLabel}>REGISTERED VOTERS · {allVoters.length}</span>
+                  {allVoters.map(voter => {
+                    const voterVotes = Object.entries(ratings)
+                      .map(([key, block]) => block[voter] ? { key, vote: block[voter] } : null)
+                      .filter(Boolean)
+                    const counts = { rainbow: 0, green: 0, yellow: 0, red: 0 }
+                    voterVotes.forEach(v => { if (counts[v.vote] !== undefined) counts[v.vote]++ })
+                    const isMe = voter === userName
+                    return (
+                      <button key={voter} onClick={() => setFriend(voter)} style={{
+                        width: '100%', background: isMe ? '#6bcb7710' : '#13111e',
+                        border: `1px solid ${isMe ? '#6bcb7730' : '#1e1d2a'}`,
+                        borderRadius: 10, padding: '12px 14px', marginBottom: 8, cursor: 'pointer',
+                        display: 'flex', alignItems: 'center', gap: 12,
+                        fontFamily: "'Inconsolata',monospace", textAlign: 'left',
+                        transition: 'border-color .15s, background .15s',
+                      }}
+                      onMouseEnter={e => { e.currentTarget.style.borderColor = '#6bcb7740'; e.currentTarget.style.background = '#6bcb7710' }}
+                      onMouseLeave={e => { e.currentTarget.style.borderColor = isMe ? '#6bcb7730' : '#1e1d2a'; e.currentTarget.style.background = isMe ? '#6bcb7710' : '#13111e' }}
+                      >
+                        <div style={{
+                          width: 36, height: 36, borderRadius: '50%', flexShrink: 0,
+                          background: isMe ? '#6bcb7730' : '#1e1c2a',
+                          border: `2px solid ${isMe ? '#6bcb77' : '#2e2c3e'}`,
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          fontSize: 14, color: isMe ? '#6bcb77' : '#555',
+                        }}>
+                          {voter[0].toUpperCase()}
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: isMe ? '#6bcb77' : '#c8c4d8', marginBottom: 3 }}>
+                            {voter}{isMe && <span style={{ fontSize: 9, marginLeft: 6, color: '#6bcb7788', letterSpacing: 2 }}>YOU</span>}
+                          </div>
+                          <div style={{ display: 'flex', gap: 8, fontSize: 10 }}>
+                            {counts.rainbow > 0 && <span style={{ color: '#c77dff' }}>🌈 {counts.rainbow}</span>}
+                            {counts.green > 0 && <span style={{ color: '#6bcb77' }}>🟢 {counts.green}</span>}
+                            {counts.yellow > 0 && <span style={{ color: '#ffd93d' }}>🟡 {counts.yellow}</span>}
+                            {counts.red > 0 && <span style={{ color: '#ff6b6b' }}>🔴 {counts.red}</span>}
+                            {voterVotes.length === 0 && <span style={{ color: '#252530' }}>no votes yet</span>}
+                          </div>
+                        </div>
+                        <span style={{ color: '#2e2c3e', fontSize: 16 }}>›</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+
+              {/* Friend detail view */}
+              {selectedFriend && (() => {
+                const friendVotes = transitions.map(t => ({
+                  ...t,
+                  friendVote: (ratings[t.key] || {})[selectedFriend] || null,
+                })).filter(t => t.friendVote)
+                const fCounts = { rainbow: 0, green: 0, yellow: 0, red: 0 }
+                friendVotes.forEach(v => { if (fCounts[v.friendVote] !== undefined) fCounts[v.friendVote]++ })
+                return (
+                  <div style={{ width: '100%' }}>
+                    {/* Header */}
+                    <div style={{ ...S.card({ marginBottom: 12, border: '1px solid #6bcb7720' }) }}>
+                      <button onClick={() => setFriend(null)} style={{
+                        background: 'none', border: 'none', color: '#6bcb77', cursor: 'pointer',
+                        fontSize: 10, letterSpacing: 2, fontFamily: "'Inconsolata',monospace",
+                        padding: 0, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 4,
+                      }}>‹ ALL VOTERS</button>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <div style={{
+                          width: 48, height: 48, borderRadius: '50%',
+                          background: '#6bcb7730', border: '2px solid #6bcb77',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          fontSize: 20, color: '#6bcb77', fontWeight: 700, flexShrink: 0,
+                        }}>
+                          {selectedFriend[0].toUpperCase()}
+                        </div>
+                        <div>
+                          <div style={{ fontSize: 16, fontWeight: 700, color: '#e8e4f0', fontFamily: "'Playfair Display',serif" }}>{selectedFriend}</div>
+                          <div style={{ display: 'flex', gap: 8, fontSize: 10, marginTop: 4 }}>
+                            {fCounts.rainbow > 0 && <span style={{ color: '#c77dff' }}>🌈 {fCounts.rainbow}</span>}
+                            {fCounts.green > 0 && <span style={{ color: '#6bcb77' }}>🟢 {fCounts.green}</span>}
+                            {fCounts.yellow > 0 && <span style={{ color: '#ffd93d' }}>🟡 {fCounts.yellow}</span>}
+                            {fCounts.red > 0 && <span style={{ color: '#ff6b6b' }}>🔴 {fCounts.red}</span>}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Their ratings */}
+                    {friendVotes.length === 0 ? (
+                      <div style={{ ...S.card({ textAlign: 'center', padding: '32px 24px' }) }}>
+                        <div style={{ color: '#252530', fontSize: 12 }}>{selectedFriend} hasn't rated any transitions yet.</div>
+                      </div>
+                    ) : (
+                      <div style={S.card()}>
+                        <span style={S.sectionLabel}>{friendVotes.length} RATING{friendVotes.length !== 1 ? 'S' : ''}</span>
+                        {friendVotes.map((t, i) => {
+                          const rv = getRating(t.friendVote)
+                          return (
+                            <div key={t.key} style={{
+                              display: 'flex', alignItems: 'center', gap: 10, padding: '10px 0',
+                              borderBottom: i < friendVotes.length - 1 ? '1px solid #10101a' : 'none',
+                            }}>
+                              {/* Album art pair */}
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                                {t.from.albumArt
+                                  ? <img src={t.from.albumArt} alt="" style={{ width: 28, height: 28, borderRadius: 4, objectFit: 'cover' }} />
+                                  : <div style={{ width: 28, height: 28, borderRadius: 4, background: '#18181f', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>🎵</div>
+                                }
+                                <span style={{ fontSize: 9, color: '#6bcb7766' }}>›</span>
+                                {t.to.albumArt
+                                  ? <img src={t.to.albumArt} alt="" style={{ width: 28, height: 28, borderRadius: 4, objectFit: 'cover' }} />
+                                  : <div style={{ width: 28, height: 28, borderRadius: 4, background: '#18181f', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>🎵</div>
+                                }
+                              </div>
+                              {/* Track names */}
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ fontSize: 11, color: '#8884a0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  {t.from.title}
+                                </div>
+                                <div style={{ fontSize: 9, color: '#252530' }}>→ {t.to.title}</div>
+                              </div>
+                              {/* Their vote */}
+                              {rv && (
+                                <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 5 }}>
+                                  <span style={{ fontSize: 14 }}>{rv.emoji}</span>
+                                  {rv.isRainbow
+                                    ? <span style={{ fontSize: 8, fontWeight: 700, letterSpacing: 1.5, background: RAINBOW, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>ELITE</span>
+                                    : <span style={{ fontSize: 8, fontWeight: 700, letterSpacing: 1.5, color: rv.color }}>{rv.label.toUpperCase()}</span>
+                                  }
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
+            </>
+          )}
         </div>
       )}
 

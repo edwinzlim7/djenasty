@@ -212,19 +212,19 @@ function ExpandingRater({ myVote, onVote }) {
       {open && (
         <div style={{
           position: 'absolute', bottom: 52, left: '50%', transform: 'translateX(-50%)',
-          display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'stretch',
+          display: 'flex', flexDirection: 'column', gap: 3, alignItems: 'stretch',
           zIndex: 100,
-          background: '#13111e',
+          background: '#1a1828',
           borderRadius: 16,
-          border: '1px solid #3a3560',
-          boxShadow: '0 12px 48px #000000cc, 0 0 0 1px #ffffff08',
-          padding: '8px 6px',
-          minWidth: 110,
+          border: '1.5px solid #5a54a0',
+          boxShadow: '0 16px 56px #000000dd, 0 0 0 1px #ffffff10',
+          padding: '10px 8px',
+          minWidth: 148,
           animation: 'fanIn .15s ease-out',
         }}>
 
           {/* Header */}
-          <div style={{ fontSize: 8, letterSpacing: 3, color: '#6560a0', textAlign: 'center', padding: '0 4px 6px', borderBottom: '1px solid #22203a' }}>
+          <div style={{ fontSize: 10, letterSpacing: 3, fontWeight: 700, color: '#b8b0f0', textAlign: 'center', padding: '0 4px 8px', borderBottom: '1.5px solid #3a3560' }}>
             RATE THIS MIX
           </div>
 
@@ -233,35 +233,36 @@ function ExpandingRater({ myVote, onVote }) {
             const isActive = myVote === rv.key
             return (
               <div key={rv.key} style={{
-                display: 'flex', alignItems: 'center', gap: 8,
-                padding: '5px 8px', borderRadius: 10, cursor: 'pointer',
-                background: isActive ? (rv.isRainbow ? 'rgba(199,125,255,0.12)' : `${rv.color}18`) : 'transparent',
-                border: isActive ? `1px solid ${rv.isRainbow ? '#c77dff44' : rv.color + '44'}` : '1px solid transparent',
+                display: 'flex', alignItems: 'center', gap: 10,
+                padding: '7px 10px', borderRadius: 10, cursor: 'pointer',
+                background: isActive ? (rv.isRainbow ? 'rgba(199,125,255,0.15)' : `${rv.color}22`) : '#22203a',
+                border: isActive ? `1.5px solid ${rv.isRainbow ? '#c77dff88' : rv.color + '88'}` : '1.5px solid transparent',
                 transition: 'all 0.15s ease',
+                marginTop: 2,
               }}>
                 {/* Vote button — only fires for non-active */}
                 <button
                   onClick={() => !isActive && handlePick(rv.key)}
                   style={{
-                    width: 30, height: 30, borderRadius: '50%', border: 'none',
+                    width: 32, height: 32, borderRadius: '50%', border: 'none',
                     cursor: isActive ? 'default' : 'pointer',
-                    background: isActive ? (rv.isRainbow ? RAINBOW : rv.color) : '#1e1c2a',
+                    background: isActive ? (rv.isRainbow ? RAINBOW : rv.color) : '#2e2c4a',
                     boxShadow: isActive
-                      ? (rv.isRainbow ? '0 0 10px 3px #c77dff55' : `0 0 10px 3px ${rv.color}55`)
-                      : 'inset 0 2px 4px #00000088',
+                      ? (rv.isRainbow ? '0 0 12px 4px #c77dff66' : `0 0 12px 4px ${rv.color}66`)
+                      : 'inset 0 2px 4px #00000099',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: 14, flexShrink: 0,
+                    fontSize: 15, flexShrink: 0,
                     transition: 'all 0.15s ease',
                   }}
                 >
-                  <span style={{ opacity: isActive ? 1 : 0.5 }}>{rv.emoji}</span>
+                  <span style={{ opacity: isActive ? 1 : 0.7 }}>{rv.emoji}</span>
                 </button>
 
                 {/* Label */}
                 <span style={{
                   flex: 1,
-                  fontSize: 11, fontWeight: isActive ? 700 : 400,
-                  color: isActive ? (rv.isRainbow ? '#d4a8ff' : rv.color) : '#7870a8',
+                  fontSize: 12, fontWeight: isActive ? 800 : 600,
+                  color: isActive ? (rv.isRainbow ? '#e0c8ff' : rv.color) : '#c0bcd8',
                   letterSpacing: 0.5,
                 }}>
                   {rv.label}
@@ -273,15 +274,15 @@ function ExpandingRater({ myVote, onVote }) {
                     onClick={handleRemove}
                     title="Remove your vote"
                     style={{
-                      width: 20, height: 20, borderRadius: '50%',
-                      background: '#2a2840', border: '1px solid #4a4870',
-                      color: '#9490aa', fontSize: 10, cursor: 'pointer',
+                      width: 22, height: 22, borderRadius: '50%',
+                      background: '#3a3660', border: '1.5px solid #6a64a0',
+                      color: '#c0bcd8', fontSize: 11, fontWeight: 700, cursor: 'pointer',
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
                       flexShrink: 0, lineHeight: 1,
-                      transition: 'background 0.15s, color 0.15s',
+                      transition: 'background 0.15s, color 0.15s, border-color 0.15s',
                     }}
-                    onMouseEnter={e => { e.currentTarget.style.background = '#ff6b6b33'; e.currentTarget.style.color = '#ff6b6b' }}
-                    onMouseLeave={e => { e.currentTarget.style.background = '#2a2840'; e.currentTarget.style.color = '#9490aa' }}
+                    onMouseEnter={e => { e.currentTarget.style.background = '#ff6b6b44'; e.currentTarget.style.color = '#ff6b6b'; e.currentTarget.style.borderColor = '#ff6b6b88' }}
+                    onMouseLeave={e => { e.currentTarget.style.background = '#3a3660'; e.currentTarget.style.color = '#c0bcd8'; e.currentTarget.style.borderColor = '#6a64a0' }}
                   >
                     ✕
                   </button>
@@ -291,7 +292,7 @@ function ExpandingRater({ myVote, onVote }) {
           })}
 
           {/* Footer */}
-          <div style={{ fontSize: 8, letterSpacing: 2, color: '#3a3560', textAlign: 'center', padding: '6px 4px 2px', borderTop: '1px solid #22203a' }}>
+          <div style={{ fontSize: 10, letterSpacing: 1.5, fontWeight: 600, color: '#9490c8', textAlign: 'center', padding: '8px 4px 2px', borderTop: '1.5px solid #3a3560' }}>
             {myVote ? 'TAP ✕ TO REMOVE VOTE' : 'TAP A RATING ABOVE'}
           </div>
         </div>

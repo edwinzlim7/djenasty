@@ -274,19 +274,21 @@ function ExpandingRater({ myVote, onVote }) {
           onClick={() => setOpen(o => !o)}
           title={active ? `Your vote: ${active.label} — tap to change` : 'Tap to rate'}
           style={{
-            width: 42, height: 42, borderRadius: '50%', border: 'none', cursor: 'pointer',
-            background: active ? (active.isRainbow ? RAINBOW : active.color) : '#1e1c2a',
+            width: 46, height: 46, borderRadius: '50%', cursor: 'pointer',
+            background: active ? (active.isRainbow ? RAINBOW : active.color) : '#1a1830',
+            border: active ? '2px solid transparent' : '2px solid #6bcb77',
             boxShadow: active
               ? (active.isRainbow ? '0 0 20px 6px #c77dff44' : `0 0 18px 6px ${active.color}66`)
-              : 'inset 0 2px 8px #00000099, 0 0 0 1px #2a2838',
+              : '0 0 10px 2px #6bcb7733',
+            animation: active ? 'none' : 'rateButtonPulse 2s ease-in-out infinite',
             transition: 'all 0.2s cubic-bezier(.4,2,.5,1)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            transform: open ? 'scale(1.08)' : 'scale(1)',
+            transform: open ? 'scale(1.1)' : 'scale(1)',
           }}
         >
           {active
             ? <span style={{ fontSize: 17 }}>{active.emoji}</span>
-            : <span style={{ opacity: 0.4, fontSize: 18 }}>☆</span>
+            : <span style={{ fontSize: 18, color: '#6bcb77' }}>★</span>
           }
         </button>
         {/* Vote animation fires from the trigger button position */}
@@ -858,6 +860,10 @@ export default function App() {
         @keyframes slideDown {
           from { opacity: 0; transform: translateY(-6px); }
           to   { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes rateButtonPulse {
+          0%, 100% { box-shadow: 0 0 8px 2px #6bcb7733; border-color: #6bcb77; }
+          50%       { box-shadow: 0 0 18px 5px #6bcb7766; border-color: #6bcb77cc; }
         }
       `}</style>
 

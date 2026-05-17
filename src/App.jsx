@@ -300,7 +300,7 @@ function ExpandingRater({ myVote, onVote }) {
       {/* ── Expanded panel ── */}
       {open && (
         <div style={{
-          position: 'absolute', bottom: 52, left: '50%', transform: 'translateX(-50%)',
+          position: 'absolute', bottom: 54, right: 0,
           display: 'flex', flexDirection: 'column', gap: 3, alignItems: 'stretch',
           zIndex: 100,
           background: '#1a1828',
@@ -310,6 +310,7 @@ function ExpandingRater({ myVote, onVote }) {
           padding: '10px 8px',
           minWidth: 148,
           animation: 'fanIn .15s ease-out',
+          touchAction: 'none',
         }}>
 
           {/* Header */}
@@ -828,8 +829,8 @@ export default function App() {
         ::-webkit-scrollbar { width: 3px; }
         ::-webkit-scrollbar-thumb { background: #1e1d2a; }
         @keyframes fanIn {
-          from { opacity: 0; transform: translateX(-50%) translateY(8px); }
-          to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+          from { opacity: 0; transform: translateY(6px); }
+          to   { opacity: 1; transform: translateY(0); }
         }
         @keyframes voteBurst {
           0%   { opacity: 1; transform: translate(0, 0) scale(1); }
@@ -959,15 +960,35 @@ export default function App() {
 
           {/* Search results */}
           {searchQuery.trim().length >= 2 && (
-            <div style={{ ...S.card({ marginBottom: 16, border: '1px solid #6bcb7720' }) }}>
-              <span style={S.sectionLabel}>SEARCH RESULTS · {searchResults.length} TRANSITION{searchResults.length !== 1 ? 'S' : ''}</span>
+            <div style={{
+              marginBottom: 16,
+              background: '#0a0918',
+              border: '1.5px solid #6bcb7740',
+              borderRadius: 14,
+              padding: '16px 14px',
+              boxShadow: '0 0 0 4px #6bcb7708',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+                <span style={{ fontSize: 9, letterSpacing: 4, color: '#6bcb77', fontWeight: 700 }}>
+                  🔍 SEARCH RESULTS
+                </span>
+                <span style={{ fontSize: 9, color: '#3a3560', letterSpacing: 2 }}>
+                  {searchResults.length} TRANSITION{searchResults.length !== 1 ? 'S' : ''}
+                </span>
+                <button onClick={() => setSearchQuery('')} style={{
+                  marginLeft: 'auto', background: '#1a1828', border: '1px solid #3a3560',
+                  color: '#55526a', fontSize: 10, cursor: 'pointer', fontFamily: 'inherit',
+                  borderRadius: 6, padding: '3px 9px', letterSpacing: 1,
+                }}>CLEAR ×</button>
+              </div>
               {searchResults.length === 0 ? (
                 <div style={{ color: '#252530', fontSize: 12 }}>No transitions found for "{searchQuery}"</div>
               ) : (
                 searchResults.map(t => (
                   <div key={t.key} style={{
-                    background: '#0c0b12', border: `1.5px solid ${t.myVote ? (getRating(t.myVote)?.color || '#fff') + '44' : '#16151f'}`,
+                    background: '#13111e', border: `1.5px solid ${t.myVote ? (getRating(t.myVote)?.color || '#fff') + '55' : '#2a2840'}`,
                     borderRadius: 12, padding: '12px 14px', marginBottom: 8,
+                    boxShadow: '0 2px 12px #00000055',
                   }}>
                     {/* Album art mini row */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
@@ -1053,6 +1074,14 @@ export default function App() {
           )}
 
           {/* Transition cards */}
+          {searchQuery.trim().length >= 2 && transitions.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, opacity: 0.4 }}>
+              <div style={{ flex: 1, height: 1, background: '#1e1c2a' }} />
+              <span style={{ fontSize: 9, letterSpacing: 3, color: '#3a3560', whiteSpace: 'nowrap' }}>FULL PLAYLIST</span>
+              <div style={{ flex: 1, height: 1, background: '#1e1c2a' }} />
+            </div>
+          )}
+          <div style={{ opacity: searchQuery.trim().length >= 2 ? 0.35 : 1, transition: 'opacity .2s', pointerEvents: searchQuery.trim().length >= 2 ? 'none' : 'auto' }}>
           {transitions.map(t => {
             const bColor = t.myVote
               ? (t.myVote === 'rainbow' ? '#c77dff44' : (getRating(t.myVote)?.color || '#fff') + '44')
@@ -1274,6 +1303,7 @@ export default function App() {
               </div>
             )
           })}
+          </div>
 
           {/* DJ Summary */}
           {djMode && transitions.length > 0 && (

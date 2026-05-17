@@ -12,37 +12,85 @@ import {
 const DJ_PASSWORD = import.meta.env.VITE_DJ_PASSWORD || 'GOATED'
 
 // ─── CSV parser ────────────────────────────────────────────────────────────
+function splitCSVLine(line) {
+  // Properly handles quoted fields containing commas
+  const cols = []
+  let current = '', inQuotes = false
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]
+    if (ch === '"') { inQuotes = !inQuotes }
+    else if (ch === ',' && !inQuotes) { cols.push(current.trim()); current = '' }
+    else { current += ch }
+  }
+  cols.push(current.trim())
+  return cols
+}
+
 function parseCSV(text) {
   const lines = text.trim().split('\n')
   if (!lines.length) return []
-  const firstLower = lines[0].toLowerCase()
-  const hasHeader = ['title', 'name', 'track', 'artist'].some(w => firstLower.includes(w))
+
+  const headerLine = lines[0].toLowerCase()
+  const hasHeader = ['title', 'name', 'track', 'artist'].some(w => headerLine.includes(w))
+
+  // Detect Exportify by checking header for "artist ids" or "artist name(s)"
+  // Exportify columns: Spotify ID(0), Artist IDs(1), Track Name(2), Album Name(3), Artist Name(s)(4), ...
+  const isExportify = headerLine.includes('artist ids') || headerLine.includes('artist name')
+
+  // For non-Exportify CSVs with a header, detect which columns are title/artist
+  let titleIdx = 2, artistIdx = 4  // Exportify defaults
+  if (hasHeader && !isExportify) {
+    const headers = splitCSVLine(lines[0]).map(h => h.toLowerCase().replace(/"/g, ''))
+    titleIdx  = headers.findIndex(h => h.includes('title') || h.includes('track') || h.includes('name'))
+    artistIdx = headers.findIndex(h => h.includes('artist'))
+    if (titleIdx === -1)  titleIdx = 0
+    if (artistIdx === -1) artistIdx = 1
+  }
+
   const dataLines = hasHeader ? lines.slice(1) : lines
   const tracks = []
+
   for (const line of dataLines) {
     if (!line.trim()) continue
-    const cols = line.match(/(".*?"|[^,]+)(?=\s*,|\s*$)/g)?.map(c => c.replace(/^"|"$/g, '').trim()) || []
+    const cols = splitCSVLine(line)
     if (!cols.length) continue
+
     let title = '', artist = ''
-    if (cols.length >= 3)       { artist = cols[1]; title = cols[2] }
-    else if (cols.length === 2) { title = cols[0]; artist = cols[1] }
-    else {
+
+    let albumArt = ''
+    if (isExportify && cols.length >= 5) {
+      // Exportify: col 2 = Track Name, col 4 = Artist Name(s), col 13 = Album Image URL
+      title    = cols[2]
+      artist   = cols[4]
+      albumArt = cols.length >= 14 ? cols[13] : ''
+    } else if (cols.length >= 3) {
+      title  = cols[titleIdx] || cols[0]
+      artist = cols[artistIdx] || cols[1]
+    } else if (cols.length === 2) {
+      title = cols[0]; artist = cols[1]
+    } else {
+      // Single column: try "Artist - Title"
       const dash = cols[0].indexOf(' - ')
       if (dash > -1) { artist = cols[0].slice(0, dash); title = cols[0].slice(dash + 3) }
       else title = cols[0]
     }
-    if (title) tracks.push({ id: `${artist}::${title}`, title, artist })
+
+    // Strip any remaining Spotify URI artifacts just in case
+    if (artist.startsWith('spotify:')) artist = ''
+
+    if (title) tracks.push({ id: `${artist}::${title}`, title, artist, albumArt })
   }
+
   return tracks
 }
 
 // ─── Rating config ─────────────────────────────────────────────────────────
 const RAINBOW = 'linear-gradient(90deg,#ff6b6b,#ffd93d,#6bcb77,#4d96ff,#c77dff)'
 const RATINGS = [
+  { key: 'rainbow', label: 'ELITE',  color: '#c77dff', bg: 'transparent', border: 'transparent', emoji: '🌈', score: 4, isRainbow: true },
   { key: 'green',   label: 'Fire',    color: '#6bcb77', bg: '#6bcb7718', border: '#6bcb7740', emoji: '🟢', score: 3 },
   { key: 'yellow',  label: 'Solid',   color: '#ffd93d', bg: '#ffd93d18', border: '#ffd93d40', emoji: '🟡', score: 2 },
   { key: 'red',     label: 'Drop it', color: '#ff6b6b', bg: '#ff6b6b18', border: '#ff6b6b40', emoji: '🔴', score: 0 },
-  { key: 'rainbow', label: 'ANTHEM',  color: '#c77dff', bg: 'transparent', border: 'transparent', emoji: '🌈', score: 4, isRainbow: true },
 ]
 const getRating = key => RATINGS.find(r => r.key === key) || null
 
@@ -52,9 +100,11 @@ function calcVerdict(allRatings) {
   const c = { green: 0, yellow: 0, red: 0, rainbow: 0 }
   votes.forEach(v => { if (c[v] !== undefined) c[v]++ })
   if (c.rainbow > 0) return 'rainbow'
+  // Score: green=1.0, yellow=0.67, red=0.0
+  // Thresholds: green needs majority green votes, yellow is middle ground
   const score = (c.green * 3 + c.yellow * 2) / (votes.length * 3)
-  if (score >= 0.65) return 'green'
-  if (score >= 0.35) return 'yellow'
+  if (score >= 0.8) return 'green'
+  if (score >= 0.4) return 'yellow'
   return 'red'
 }
 
@@ -83,12 +133,12 @@ function buildAnalytics(transitions, ratings, ratingHistory) {
   const voted = stats.filter(s => s.total > 0)
   const best  = [...voted].sort((a, b) => (b.score ?? -1) - (a.score ?? -1)).slice(0, 5)
   const worst = [...voted].sort((a, b) => (a.score ?? 99) - (b.score ?? 99)).slice(0, 5)
-  const anthems = voted.filter(s => s.counts.rainbow > 0).sort((a, b) => b.counts.rainbow - a.counts.rainbow)
+  const elites = voted.filter(s => s.counts.rainbow > 0).sort((a, b) => b.counts.rainbow - a.counts.rainbow)
 
   // Participation per transition
   const avgVotesPerTransition = voted.length ? (voted.reduce((sum, s) => sum + s.total, 0) / voted.length).toFixed(1) : 0
 
-  return { stats, totalVotes, totalVoters, globalCounts, best, worst, anthems, avgVotesPerTransition, voted }
+  return { stats, totalVotes, totalVoters, globalCounts, best, worst, elites, avgVotesPerTransition, voted }
 }
 
 // ─── Small UI components ────────────────────────────────────────────────────
@@ -102,20 +152,75 @@ function NewBadge() {
   )
 }
 
-function VoteBtn({ ratingKey, active, onClick }) {
-  const r = getRating(ratingKey)
+function ExpandingRater({ myVote, onVote }) {
+  const [open, setOpen] = useState(false)
+  const active = myVote ? getRating(myVote) : null
+
+  const handlePick = (key) => {
+    onVote(key)
+    setOpen(false)
+  }
+
   return (
-    <button onClick={onClick} title={`${r.label} (${r.emoji})`} style={{
-      width: 32, height: 32, borderRadius: '50%', border: 'none', cursor: 'pointer',
-      background: active ? (r.isRainbow ? RAINBOW : r.color) : '#111117',
-      boxShadow: active ? (r.isRainbow ? '0 0 18px 5px #c77dff44' : `0 0 14px 4px ${r.color}55`) : 'inset 0 2px 5px #00000088',
-      transform: active ? 'scale(1.22)' : 'scale(1)',
-      transition: 'all 0.18s cubic-bezier(.4,2,.5,1)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      fontSize: 13, flexShrink: 0,
-    }}>
-      {!active && <span style={{ opacity: 0.25, fontSize: 11 }}>{r.emoji}</span>}
-    </button>
+    <div style={{ position: 'relative', flexShrink: 0 }}>
+      {/* Main trigger button */}
+      <button
+        onClick={() => setOpen(o => !o)}
+        title={active ? `Your vote: ${active.label} — click to change` : 'Rate this transition'}
+        style={{
+          width: 40, height: 40, borderRadius: '50%', border: 'none', cursor: 'pointer',
+          background: active ? (active.isRainbow ? RAINBOW : active.color) : '#18181f',
+          boxShadow: active
+            ? (active.isRainbow ? '0 0 18px 6px #c77dff44' : `0 0 16px 5px ${active.color}55`)
+            : 'inset 0 2px 6px #00000099',
+          transition: 'all 0.2s cubic-bezier(.4,2,.5,1)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: active ? 16 : 18,
+          transform: open ? 'scale(1.1)' : 'scale(1)',
+        }}
+      >
+        {active ? '' : <span style={{ opacity: 0.3, fontSize: 16 }}>☆</span>}
+      </button>
+
+      {/* Expanded options — fan out upward */}
+      {open && (
+        <div style={{
+          position: 'absolute', bottom: 48, left: '50%', transform: 'translateX(-50%)',
+          display: 'flex', flexDirection: 'column', gap: 7, alignItems: 'center',
+          zIndex: 50, padding: '8px 6px', background: '#0c0b14',
+          borderRadius: 14, border: '1px solid #22202e',
+          boxShadow: '0 8px 32px #000c',
+          animation: 'fanIn .15s ease-out',
+        }}>
+          {RATINGS.map(rv => (
+            <button
+              key={rv.key}
+              onClick={() => handlePick(myVote === rv.key ? null : rv.key)}
+              title={rv.label}
+              style={{
+                width: 34, height: 34, borderRadius: '50%', border: 'none', cursor: 'pointer',
+                background: myVote === rv.key ? (rv.isRainbow ? RAINBOW : rv.color) : '#18181f',
+                boxShadow: myVote === rv.key
+                  ? (rv.isRainbow ? '0 0 14px 4px #c77dff44' : `0 0 12px 4px ${rv.color}55`)
+                  : 'inset 0 2px 5px #00000088',
+                transition: 'all 0.15s ease',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 14, flexShrink: 0,
+                transform: myVote === rv.key ? 'scale(1.15)' : 'scale(1)',
+              }}
+            >
+              {myVote !== rv.key && <span style={{ opacity: 0.35, fontSize: 13 }}>{rv.emoji}</span>}
+            </button>
+          ))}
+          {/* Label for active */}
+          {myVote && (
+            <div style={{ fontSize: 8, letterSpacing: 2, color: active?.isRainbow ? '#c77dff' : active?.color, marginTop: 2, textAlign: 'center' }}>
+              {active?.label.toUpperCase()}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -129,14 +234,14 @@ function VerdictChip({ allRatings }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
       {r.isRainbow ? (
-        <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: 2, padding: '3px 10px', borderRadius: 5, background: RAINBOW, color: '#000' }}>ANTHEM</span>
+        <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: 2, padding: '3px 10px', borderRadius: 5, background: RAINBOW, color: '#000' }}>ELITE</span>
       ) : (
         <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: 2, padding: '3px 10px', borderRadius: 5, color: r.color, background: r.bg, border: `1px solid ${r.border}` }}>
           {r.label.toUpperCase()}
         </span>
       )}
       <span style={{ fontSize: 11, display: 'flex', gap: 5 }}>
-        {c.rainbow > 0 && <span title="Anthem">🌈{c.rainbow}</span>}
+        {c.rainbow > 0 && <span title="Elite">🌈{c.rainbow}</span>}
         {c.green > 0 && <span style={{ color: '#6bcb77' }}>●{c.green}</span>}
         {c.yellow > 0 && <span style={{ color: '#ffd93d' }}>●{c.yellow}</span>}
         {c.red > 0 && <span style={{ color: '#ff6b6b' }}>●{c.red}</span>}
@@ -307,6 +412,7 @@ export default function App() {
       // 2. Build new tracks array, preserving addedIn version for existing tracks
       const newTracks = parsed.map(t => ({
         ...t,
+        albumArt: t.albumArt || tracks.find(o => o.id === t.id)?.albumArt || '',
         addedIn: addedIds.includes(t.id) ? newVersion : (tracks.find(o => o.id === t.id)?.addedIn || 1),
       }))
 
@@ -429,6 +535,10 @@ export default function App() {
         textarea { resize: vertical; }
         ::-webkit-scrollbar { width: 3px; }
         ::-webkit-scrollbar-thumb { background: #1e1d2a; }
+        @keyframes fanIn {
+          from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+          to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+        }
       `}</style>
 
       {/* ── HEADER ── */}
@@ -450,6 +560,20 @@ export default function App() {
             : <button onClick={() => setDjMode(false)} style={{ ...S.btn('#6bcb77', '#000'), fontSize: 10, padding: '8px 13px' }}>✦ DJ MODE</button>
           }
         </div>
+      </div>
+
+      {/* ── SPOTIFY EMBED ── */}
+      <div style={{ width: '100%', maxWidth: 560, marginBottom: 20 }}>
+        <iframe
+          style={{ borderRadius: 12 }}
+          src="https://open.spotify.com/embed/playlist/1J28GW1w0BfpTBV3vpLQls?utm_source=generator&theme=0"
+          width="100%"
+          height="352"
+          frameBorder="0"
+          allowFullScreen
+          allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+          loading="lazy"
+        />
       </div>
 
       {/* ── NAME PILL ── */}
@@ -533,67 +657,90 @@ export default function App() {
               <div key={t.key} className="tc" style={{
                 background: '#0c0b12', border: `1.5px solid ${bColor}`,
                 borderRadius: 14, padding: '14px 14px', marginBottom: 10,
-                display: 'flex', gap: 13, alignItems: 'flex-start',
               }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 7, paddingTop: 3 }}>
-                  {RATINGS.map(rv => (
-                    <VoteBtn key={rv.key} ratingKey={rv.key} active={t.myVote === rv.key} onClick={() => handleVote(t.index, rv.key)} />
-                  ))}
+
+                {/* Album art row */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+                  {/* FROM art */}
+                  <div style={{ flexShrink: 0, position: 'relative' }}>
+                    {t.from.albumArt
+                      ? <img src={t.from.albumArt} alt="" style={{ width: 54, height: 54, borderRadius: 8, objectFit: 'cover', display: 'block' }} />
+                      : <div style={{ width: 54, height: 54, borderRadius: 8, background: '#18181f', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}>🎵</div>
+                    }
+                  </div>
+                  {/* Arrow */}
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 9, color: '#22202e', letterSpacing: 2, marginBottom: 2 }}>TRANSITION</div>
+                    <div style={{ fontSize: 16, color: '#6bcb7755' }}>→</div>
+                  </div>
+                  {/* TO art */}
+                  {t.to.albumArt
+                    ? <img src={t.to.albumArt} alt="" style={{ width: 54, height: 54, borderRadius: 8, objectFit: 'cover', display: 'block', flexShrink: 0 }} />
+                    : <div style={{ width: 54, height: 54, borderRadius: 8, background: '#18181f', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, flexShrink: 0 }}>🎵</div>
+                  }
                 </div>
 
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ marginBottom: 7 }}>
-                    <span style={S.dimLabel}>FROM</span>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: '#c8c4d8', display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
-                      <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 'calc(100% - 60px)' }}>{t.from.title}</span>
-                      {newTrackIds.has(t.from.id) && <NewBadge />}
+                {/* Content + rate button row */}
+                <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ marginBottom: 7 }}>
+                      <span style={S.dimLabel}>FROM</span>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: '#c8c4d8', display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+                        <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 'calc(100% - 60px)' }}>{t.from.title}</span>
+                        {newTrackIds.has(t.from.id) && <NewBadge />}
+                      </div>
+                      {t.from.artist && <div style={{ fontSize: 10, color: '#33303f', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.from.artist}</div>}
                     </div>
-                    {t.from.artist && <div style={{ fontSize: 10, color: '#33303f', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.from.artist}</div>}
+
+                    <div style={{ fontSize: 9, color: '#6bcb7744', letterSpacing: 3, marginBottom: 7 }}>↓ MIX INTO</div>
+
+                    <div style={{ marginBottom: 11 }}>
+                      <span style={S.dimLabel}>INTO</span>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: '#c8c4d8', display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+                        <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 'calc(100% - 60px)' }}>{t.to.title}</span>
+                        {newTrackIds.has(t.to.id) && <NewBadge />}
+                      </div>
+                      {t.to.artist && <div style={{ fontSize: 10, color: '#33303f', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.to.artist}</div>}
+                    </div>
+
+                    <VerdictChip allRatings={t.allRatings} />
+
+                    {djMode && Object.keys(t.history).length > 0 && (
+                      <div style={{ marginTop: 9, display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+                        {Object.entries(t.history).map(([ver, counts]) => {
+                          const total = Object.values(counts).reduce((a, b) => a + b, 0)
+                          const sc = total ? (counts.green * 3 + (counts.yellow || 0) * 2) / (total * 3) : 0
+                          const col = sc >= 0.65 ? '#6bcb77' : sc >= 0.35 ? '#ffd93d' : '#ff6b6b'
+                          return (
+                            <span key={ver} style={{ fontSize: 10, color: col, background: `${col}12`, border: `1px solid ${col}30`, borderRadius: 5, padding: '2px 7px' }}>
+                              {ver}: {total}v
+                            </span>
+                          )
+                        })}
+                      </div>
+                    )}
+
+                    {djMode && Object.keys(t.allRatings).length > 0 && (
+                      <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                        {Object.entries(t.allRatings).map(([name, vote]) => {
+                          const rv = getRating(vote)
+                          return (
+                            <span key={name} style={{
+                              fontSize: 10, padding: '2px 8px', borderRadius: 5,
+                              background: rv?.isRainbow ? '#c77dff15' : `${rv?.color}15`,
+                              color: rv?.isRainbow ? '#c77dff' : rv?.color,
+                              border: `1px solid ${rv?.isRainbow ? '#c77dff30' : rv?.color + '30'}`,
+                            }}>{name} {rv?.emoji}</span>
+                          )
+                        })}
+                      </div>
+                    )}
                   </div>
 
-                  <div style={{ fontSize: 9, color: '#6bcb7744', letterSpacing: 3, marginBottom: 7 }}>↓ MIX INTO</div>
-
-                  <div style={{ marginBottom: 11 }}>
-                    <span style={S.dimLabel}>INTO</span>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: '#c8c4d8', display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
-                      <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 'calc(100% - 60px)' }}>{t.to.title}</span>
-                      {newTrackIds.has(t.to.id) && <NewBadge />}
-                    </div>
-                    {t.to.artist && <div style={{ fontSize: 10, color: '#33303f', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.to.artist}</div>}
+                  {/* Expanding rate button */}
+                  <div style={{ paddingTop: 2 }}>
+                    <ExpandingRater myVote={t.myVote} onVote={(key) => handleVote(t.index, key)} />
                   </div>
-
-                  <VerdictChip allRatings={t.allRatings} />
-
-                  {djMode && Object.keys(t.history).length > 0 && (
-                    <div style={{ marginTop: 9, display: 'flex', gap: 5, flexWrap: 'wrap' }}>
-                      {Object.entries(t.history).map(([ver, counts]) => {
-                        const total = Object.values(counts).reduce((a, b) => a + b, 0)
-                        const sc = total ? (counts.green * 3 + (counts.yellow || 0) * 2) / (total * 3) : 0
-                        const col = sc >= 0.65 ? '#6bcb77' : sc >= 0.35 ? '#ffd93d' : '#ff6b6b'
-                        return (
-                          <span key={ver} style={{ fontSize: 10, color: col, background: `${col}12`, border: `1px solid ${col}30`, borderRadius: 5, padding: '2px 7px' }}>
-                            {ver}: {total}v
-                          </span>
-                        )
-                      })}
-                    </div>
-                  )}
-
-                  {djMode && Object.keys(t.allRatings).length > 0 && (
-                    <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                      {Object.entries(t.allRatings).map(([name, vote]) => {
-                        const rv = getRating(vote)
-                        return (
-                          <span key={name} style={{
-                            fontSize: 10, padding: '2px 8px', borderRadius: 5,
-                            background: rv?.isRainbow ? '#c77dff15' : `${rv?.color}15`,
-                            color: rv?.isRainbow ? '#c77dff' : rv?.color,
-                            border: `1px solid ${rv?.isRainbow ? '#c77dff30' : rv?.color + '30'}`,
-                          }}>{name} {rv?.emoji}</span>
-                        )
-                      })}
-                    </div>
-                  )}
                 </div>
               </div>
             )
@@ -616,7 +763,7 @@ export default function App() {
                     <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
                       {vCount > 0 && <span style={{ fontSize: 10, color: '#252530' }}>{vCount}v</span>}
                       {r && (r.isRainbow
-                        ? <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 2, background: RAINBOW, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>ANTHEM</span>
+                        ? <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 2, background: RAINBOW, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>ELITE</span>
                         : <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 2, color: r.color }}>{r.label.toUpperCase()}</span>
                       )}
                     </div>
@@ -686,7 +833,7 @@ export default function App() {
                 { label: 'KEEP (Fire)', color: '#6bcb77', key: 'green' },
                 { label: 'MAYBE (Solid)', color: '#ffd93d', key: 'yellow' },
                 { label: 'CHANGE (Drop it)', color: '#ff6b6b', key: 'red' },
-                { label: 'ANTHEM', color: '#c77dff', key: 'rainbow' },
+                { label: 'ELITE', color: '#c77dff', key: 'rainbow' },
               ].map(({ label, color, key }) => {
                 const count = analytics.voted.filter(t => t.verdict === key).length
                 return (
@@ -704,12 +851,12 @@ export default function App() {
               </div>
             </div>
 
-            {/* Anthems */}
-            {analytics.anthems.length > 0 && (
+            {/* Elites */}
+            {analytics.elites.length > 0 && (
               <div style={{ ...S.card({ marginBottom: 12, border: '1px solid #c77dff28' }) }}>
-                <span style={{ ...S.sectionLabel, color: '#c77dff' }}>🌈 ANTHEMS</span>
-                {analytics.anthems.map((t, i) => (
-                  <div key={t.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: i < analytics.anthems.length - 1 ? '1px solid #10101a' : 'none' }}>
+                <span style={{ ...S.sectionLabel, color: '#c77dff' }}>🌈 ELITES</span>
+                {analytics.elites.map((t, i) => (
+                  <div key={t.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: i < analytics.elites.length - 1 ? '1px solid #10101a' : 'none' }}>
                     <div style={{ minWidth: 0 }}>
                       <div style={{ fontSize: 12, color: '#c8c4d8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {t.from.title} → {t.to.title}
@@ -775,7 +922,7 @@ export default function App() {
                       </div>
                     </div>
                     {v && (v.isRainbow
-                      ? <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: 2, background: RAINBOW, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', flexShrink: 0 }}>ANTHEM</span>
+                      ? <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: 2, background: RAINBOW, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', flexShrink: 0 }}>ELITE</span>
                       : <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: 2, color: v.color, flexShrink: 0 }}>{v.label.toUpperCase()}</span>
                     )}
                   </div>
@@ -926,7 +1073,7 @@ export default function App() {
         </div>
       )}
 
-      <div style={{ marginTop: 40, fontSize: 9, letterSpacing: 3, color: '#14131d' }}>LIVE · POWERED BY SUPABASE</div>
+      <div style={{ marginTop: 40, fontSize: 9, letterSpacing: 3, color: '#14131d' }}>LIVE · POWERED BY SUPABASE · DJeNasty</div>
     </div>
   )
 }

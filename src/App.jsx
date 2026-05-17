@@ -152,40 +152,77 @@ function NewBadge() {
   )
 }
 
-// ─── Vote animation — bursts emoji upward from the button, then fades ────────
+// ─── Vote animation — radial particle burst + label flash ─────────────────
 function VoteAnimation({ voteKey, onDone }) {
   const r = getRating(voteKey)
   if (!r) return null
 
-  const particles = [
-    { emoji: r.emoji,  x: 0,   delay: 0    },
-    { emoji: r.emoji,  x: -18, delay: 0.08 },
-    { emoji: r.emoji,  x: 18,  delay: 0.12 },
-  ]
+  // 8 particles evenly around a circle, each travels outward at its angle
+  const count = 8
+  const particles = Array.from({ length: count }, (_, i) => {
+    const angle = (i / count) * 360
+    const rad   = (angle * Math.PI) / 180
+    const dist  = 28 + Math.random() * 10
+    return {
+      dx: Math.cos(rad) * dist,
+      dy: Math.sin(rad) * dist,
+      delay: i * 0.018,
+      size: 4 + Math.random() * 3,
+    }
+  })
+
+  const color   = r.isRainbow ? '#c77dff' : r.color
+  const colors  = r.isRainbow
+    ? ['#ff6b6b','#ffd93d','#6bcb77','#4d96ff','#c77dff']
+    : [color, color + 'cc', color + '88']
 
   return (
     <div style={{
-      position: 'absolute', bottom: '110%', left: '50%',
-      transform: 'translateX(-50%)',
-      pointerEvents: 'none', zIndex: 200,
+      position: 'absolute', top: '50%', left: '50%',
+      transform: 'translate(-50%, -50%)',
+      pointerEvents: 'none', zIndex: 200, width: 0, height: 0,
     }}>
+      {/* Ring burst particles */}
       {particles.map((p, i) => (
-        <span
+        <div
           key={i}
           onAnimationEnd={i === 0 ? onDone : undefined}
           style={{
             position: 'absolute',
-            fontSize: 18,
-            left: p.x,
-            bottom: 0,
-            animation: `voteFloat 0.75s cubic-bezier(.2,.8,.4,1) ${p.delay}s both`,
-            display: 'inline-block',
-            filter: r.isRainbow ? 'drop-shadow(0 0 6px #c77dff)' : `drop-shadow(0 0 4px ${r.color})`,
+            width: p.size, height: p.size,
+            borderRadius: '50%',
+            background: colors[i % colors.length],
+            top: 0, left: 0,
+            '--dx': `${p.dx}px`,
+            '--dy': `${p.dy}px`,
+            animation: `voteBurst 0.55s cubic-bezier(.15,.6,.3,1) ${p.delay}s both`,
+            boxShadow: `0 0 ${p.size * 2}px ${colors[i % colors.length]}`,
           }}
-        >
-          {p.emoji}
-        </span>
+        />
       ))}
+      {/* Central flash ring */}
+      <div style={{
+        position: 'absolute',
+        width: 42, height: 42,
+        borderRadius: '50%',
+        top: -21, left: -21,
+        border: `2px solid ${color}`,
+        animation: 'voteRing 0.45s cubic-bezier(.2,.8,.3,1) both',
+        boxShadow: `0 0 12px ${color}66`,
+      }} />
+      {/* Label flash */}
+      <div style={{
+        position: 'absolute',
+        top: -52, left: '50%', transform: 'translateX(-50%)',
+        whiteSpace: 'nowrap',
+        fontSize: 9, fontWeight: 800, letterSpacing: 2.5,
+        color: color,
+        fontFamily: "'Inconsolata',monospace",
+        animation: 'voteLabelFade 0.6s ease-out 0.05s both',
+        textShadow: `0 0 12px ${color}`,
+      }}>
+        {r.label.toUpperCase()}
+      </div>
     </div>
   )
 }
@@ -705,10 +742,21 @@ export default function App() {
           from { opacity: 0; transform: translateX(-50%) translateY(8px); }
           to   { opacity: 1; transform: translateX(-50%) translateY(0); }
         }
-        @keyframes voteFloat {
-          0%   { opacity: 1;   transform: translateY(0)     scale(1); }
-          60%  { opacity: 1;   transform: translateY(-38px) scale(1.25); }
-          100% { opacity: 0;   transform: translateY(-60px) scale(0.8); }
+        @keyframes voteBurst {
+          0%   { opacity: 1; transform: translate(0, 0) scale(1); }
+          70%  { opacity: 1; transform: translate(var(--dx), var(--dy)) scale(1.1); }
+          100% { opacity: 0; transform: translate(calc(var(--dx) * 1.3), calc(var(--dy) * 1.3)) scale(0); }
+        }
+        @keyframes voteRing {
+          0%   { opacity: 0.9; transform: scale(0.6); }
+          60%  { opacity: 0.5; transform: scale(1.5); }
+          100% { opacity: 0;   transform: scale(1.9); }
+        }
+        @keyframes voteLabelFade {
+          0%   { opacity: 0; transform: translateX(-50%) translateY(6px); }
+          25%  { opacity: 1; transform: translateX(-50%) translateY(0); }
+          75%  { opacity: 1; transform: translateX(-50%) translateY(-4px); }
+          100% { opacity: 0; transform: translateX(-50%) translateY(-10px); }
         }
         @keyframes flowDot {
           0%   { opacity: 0.15; transform: translateX(-6px); }

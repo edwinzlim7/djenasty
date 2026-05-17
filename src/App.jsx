@@ -429,9 +429,14 @@ export default function App() {
     const key = tKey(idx)
     const current = (ratings[key] || {})[userName]
     try {
-      if (current === voteKey) await deleteRating(key, userName)
-      else await upsertRating(key, userName, voteKey)
-      // Realtime subscription updates state; no manual setState needed
+      // voteKey === null means explicit unvote (X button tapped)
+      // voteKey === current means toggling off same vote
+      if (voteKey === null || current === voteKey) {
+        await deleteRating(key, userName)
+      } else {
+        await upsertRating(key, userName, voteKey)
+      }
+      // Realtime subscription updates state automatically
     } catch (err) {
       console.error('Vote failed:', err)
     }

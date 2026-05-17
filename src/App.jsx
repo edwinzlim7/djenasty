@@ -84,76 +84,6 @@ function parseCSV(text) {
   return tracks
 }
 
-// ─── Album art fetcher (iTunes Search API — no key required) ───────────────
-const _artCache = {}  // in-memory cache: "artist::title" → url | null
-
-async function fetchAlbumArt(title, artist) {
-  const cacheKey = `${artist}::${title}`
-  if (cacheKey in _artCache) return _artCache[cacheKey]
-
-  try {
-    // Build a search term: prefer "artist track" but fall back to title only
-    const term = encodeURIComponent(artist ? `${artist} ${title}` : title)
-    const url = `https://itunes.apple.com/search?term=${term}&media=music&entity=song&limit=3`
-    const res = await fetch(url)
-    if (!res.ok) throw new Error(`iTunes HTTP ${res.status}`)
-    const data = await res.json()
-
-    // Pick the first result whose track/artist name roughly matches
-    const lTitle  = title.toLowerCase()
-    const lArtist = artist.toLowerCase()
-    let best = null
-
-    for (const r of (data.results || [])) {
-      const rTrack  = (r.trackName  || '').toLowerCase()
-      const rArtist = (r.artistName || '').toLowerCase()
-      // exact or near-match on track name wins immediately
-      if (rTrack.includes(lTitle) || lTitle.includes(rTrack)) {
-        if (!artist || rArtist.includes(lArtist) || lArtist.includes(rArtist)) {
-          best = r.artworkUrl100?.replace('100x100bb', '300x300bb') || r.artworkUrl100 || null
-          break
-        }
-        if (!best) best = r.artworkUrl100?.replace('100x100bb', '300x300bb') || r.artworkUrl100 || null
-      }
-    }
-
-    // Last resort: just take the first result's art
-    if (!best && data.results?.length) {
-      const r = data.results[0]
-      best = r.artworkUrl100?.replace('100x100bb', '300x300bb') || r.artworkUrl100 || null
-    }
-
-    _artCache[cacheKey] = best
-    return best
-  } catch (e) {
-    console.warn('Album art fetch failed for', title, e)
-    _artCache[cacheKey] = null
-    return null
-  }
-}
-
-// Fetch art for an array of tracks that are missing it, in parallel (batched)
-async function enrichTracksWithArt(tracks, onProgress) {
-  const missing = tracks.filter(t => !t.albumArt)
-  if (!missing.length) return tracks
-
-  const BATCH = 5  // iTunes rate-limit friendly
-  const results = { ...Object.fromEntries(tracks.map(t => [t.id, t.albumArt])) }
-
-  for (let i = 0; i < missing.length; i += BATCH) {
-    const batch = missing.slice(i, i + BATCH)
-    await Promise.all(batch.map(async t => {
-      const art = await fetchAlbumArt(t.title, t.artist)
-      results[t.id] = art || ''
-    }))
-    if (onProgress) onProgress(Math.min(i + BATCH, missing.length), missing.length)
-    // Small delay between batches to be courteous to iTunes
-    if (i + BATCH < missing.length) await new Promise(r => setTimeout(r, 300))
-  }
-
-  return tracks.map(t => ({ ...t, albumArt: results[t.id] || t.albumArt || '' }))
-}
-
 // ─── Rating config ─────────────────────────────────────────────────────────
 const RAINBOW = 'linear-gradient(90deg,#ff6b6b,#ffd93d,#6bcb77,#4d96ff,#c77dff)'
 const RATINGS = [
@@ -224,19 +154,40 @@ function NewBadge() {
 
 function ExpandingRater({ myVote, onVote }) {
   const [open, setOpen] = useState(false)
+  const containerRef = useRef(null)
   const active = myVote ? getRating(myVote) : null
 
-  const handlePick = (key) => {
-    onVote(key)
-    setOpen(false)
+  // Close panel when clicking outside
+  useEffect(() => {
+    if (!open) return
+    const handleClickOutside = (e) => {
+      if (containerRef.current && !containerRef.current.contains(e.target)) {
+        setOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    document.addEventListener('touchstart', handleClickOutside)
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+      document.removeEventListener('touchstart', handleClickOutside)
+    }
+  }, [open])
+
+  const handlePick = (rv) => {
+    // Tap active vote → unvote (pass null). Tap different → switch vote.
+    const newKey = myVote === rv.key ? null : rv.key
+    onVote(newKey)
+    // Keep panel open so user can see the change or unvote again
+    // Close only if they just cleared their vote
+    if (newKey === null) setOpen(false)
   }
 
   return (
-    <div style={{ position: 'relative', flexShrink: 0 }}>
+    <div ref={containerRef} style={{ position: 'relative', flexShrink: 0 }}>
       {/* Main trigger button */}
       <button
         onClick={() => setOpen(o => !o)}
-        title={active ? `Your vote: ${active.label} — click to change` : 'Rate this transition'}
+        title={active ? `Your vote: ${active.label} — tap to change or remove` : 'Tap to rate'}
         style={{
           width: 40, height: 40, borderRadius: '50%', border: 'none', cursor: 'pointer',
           background: active ? (active.isRainbow ? RAINBOW : active.color) : '#18181f',
@@ -252,42 +203,63 @@ function ExpandingRater({ myVote, onVote }) {
         {active ? '' : <span style={{ opacity: 0.3, fontSize: 16 }}>☆</span>}
       </button>
 
-      {/* Expanded options — fan out upward */}
+      {/* Expanded options */}
       {open && (
         <div style={{
           position: 'absolute', bottom: 48, left: '50%', transform: 'translateX(-50%)',
           display: 'flex', flexDirection: 'column', gap: 7, alignItems: 'center',
-          zIndex: 50, padding: '8px 6px', background: '#0c0b14',
-          borderRadius: 14, border: '1px solid #22202e',
+          zIndex: 50, padding: '10px 8px', background: '#0c0b14',
+          borderRadius: 14, border: '1px solid #2a2838',
           boxShadow: '0 8px 32px #000c',
           animation: 'fanIn .15s ease-out',
         }}>
-          {RATINGS.map(rv => (
-            <button
-              key={rv.key}
-              onClick={() => handlePick(myVote === rv.key ? null : rv.key)}
-              title={rv.label}
-              style={{
-                width: 34, height: 34, borderRadius: '50%', border: 'none', cursor: 'pointer',
-                background: myVote === rv.key ? (rv.isRainbow ? RAINBOW : rv.color) : '#18181f',
-                boxShadow: myVote === rv.key
-                  ? (rv.isRainbow ? '0 0 14px 4px #c77dff44' : `0 0 12px 4px ${rv.color}55`)
-                  : 'inset 0 2px 5px #00000088',
-                transition: 'all 0.15s ease',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 14, flexShrink: 0,
-                transform: myVote === rv.key ? 'scale(1.15)' : 'scale(1)',
-              }}
-            >
-              {myVote !== rv.key && <span style={{ opacity: 0.35, fontSize: 13 }}>{rv.emoji}</span>}
-            </button>
-          ))}
-          {/* Label for active */}
-          {myVote && (
-            <div style={{ fontSize: 8, letterSpacing: 2, color: active?.isRainbow ? '#c77dff' : active?.color, marginTop: 2, textAlign: 'center' }}>
-              {active?.label.toUpperCase()}
-            </div>
-          )}
+          {RATINGS.map(rv => {
+            const isActive = myVote === rv.key
+            return (
+              <div key={rv.key} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+                <button
+                  onClick={() => handlePick(rv)}
+                  title={isActive ? `Remove vote: ${rv.label}` : rv.label}
+                  style={{
+                    width: 34, height: 34, borderRadius: '50%', border: 'none', cursor: 'pointer',
+                    background: isActive ? (rv.isRainbow ? RAINBOW : rv.color) : '#18181f',
+                    boxShadow: isActive
+                      ? (rv.isRainbow ? '0 0 14px 4px #c77dff44' : `0 0 12px 4px ${rv.color}55`)
+                      : 'inset 0 2px 5px #00000088',
+                    transition: 'all 0.15s ease',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: 14, flexShrink: 0,
+                    transform: isActive ? 'scale(1.15)' : 'scale(1)',
+                    position: 'relative',
+                  }}
+                >
+                  {!isActive && <span style={{ opacity: 0.35, fontSize: 13 }}>{rv.emoji}</span>}
+                  {/* ✕ overlay on active vote to signal it can be removed */}
+                  {isActive && (
+                    <span style={{
+                      position: 'absolute', top: -4, right: -4,
+                      width: 14, height: 14, borderRadius: '50%',
+                      background: '#1a1825', border: '1px solid #3a3850',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: 8, color: '#9490aa', lineHeight: 1,
+                    }}>✕</span>
+                  )}
+                </button>
+                {/* Label below each button */}
+                <div style={{
+                  fontSize: 7, letterSpacing: 1,
+                  color: isActive ? (rv.isRainbow ? '#c77dff' : rv.color) : '#3a3850',
+                  fontWeight: isActive ? 700 : 400,
+                }}>
+                  {rv.label.toUpperCase()}
+                </div>
+              </div>
+            )
+          })}
+          {/* Footer hint */}
+          <div style={{ fontSize: 7, color: '#2a2838', marginTop: 2, letterSpacing: 1 }}>
+            {myVote ? 'TAP ✕ TO REMOVE' : 'TAP TO VOTE'}
+          </div>
         </div>
       )}
     </div>
@@ -361,7 +333,6 @@ export default function App() {
   const [csvError, setCsvError]       = useState('')
   const [importMsg, setImportMsg]     = useState('')
   const [importing, setImporting]     = useState(false)
-  const [artProgress, setArtProgress] = useState(null)   // null | { done, total }
 
   const [editingPatch, setEditPatch]  = useState(false)
   const [editingRoad, setEditRoad]    = useState(false)
@@ -468,7 +439,7 @@ export default function App() {
 
   // ── CSV Import ────────────────────────────────────────────────────────────
   const handleImport = async () => {
-    setCsvError(''); setImportMsg(''); setImporting(true); setArtProgress(null)
+    setCsvError(''); setImportMsg(''); setImporting(true)
     try {
       const parsed = parseCSV(csvText)
       if (parsed.length < 2) { setCsvError('Need at least 2 tracks. Check format.'); setImporting(false); return }
@@ -480,36 +451,26 @@ export default function App() {
       // 1. Snapshot current ratings into history BEFORE changing anything
       await saveHistorySnapshot(ratings, currentVersion)
 
-      // 2. Build new tracks array, preserving addedIn version + any existing art
-      let newTracks = parsed.map(t => ({
+      // 2. Build new tracks array, preserving addedIn version for existing tracks
+      const newTracks = parsed.map(t => ({
         ...t,
         albumArt: t.albumArt || tracks.find(o => o.id === t.id)?.albumArt || '',
         addedIn: addedIds.includes(t.id) ? newVersion : (tracks.find(o => o.id === t.id)?.addedIn || 1),
       }))
 
-      // 3. Fetch missing album art via iTunes Search API (no API key needed)
-      const missingArt = newTracks.filter(t => !t.albumArt)
-      if (missingArt.length > 0) {
-        setImportMsg(`\uD83C\uDFA8 Fetching album art for ${missingArt.length} tracks\u2026`)
-        newTracks = await enrichTracksWithArt(newTracks, (done, total) => {
-          setArtProgress({ done, total })
-        })
-        setArtProgress(null)
-      }
-
-      // 4. Persist playlist WITH new_track_ids to Supabase
+      // 3. Persist playlist WITH new_track_ids to Supabase
+      //    This is the key fix: new_track_ids is saved to DB, not just memory
       await savePlaylist(newTracks, newVersion, addedIds)
 
-      // 5. Update local state
+      // 4. Update local state
       setTracks(newTracks)
       setNewTrackIds(new Set(addedIds))
       setVersion(newVersion)
       setHistory(await getRatingHistory())
 
-      const artFound = newTracks.filter(t => t.albumArt).length
       setCsvText('')
-      setImportMsg(`\u2713 ${parsed.length} tracks \u00B7 ${addedIds.length} new \u00B7 ${artFound} with art \u00B7 v${newVersion}`)
-      setTimeout(() => setImportMsg(''), 10000)
+      setImportMsg(`✓ ${parsed.length} tracks · ${addedIds.length} new · now at v${newVersion}`)
+      setTimeout(() => setImportMsg(''), 8000)
     } catch (err) {
       setCsvError(`Import failed: ${err.message}`)
     }
@@ -620,19 +581,15 @@ export default function App() {
           from { opacity: 0; transform: translateX(-50%) translateY(8px); }
           to   { opacity: 1; transform: translateX(-50%) translateY(0); }
         }
-        @keyframes arrowFlow {
-          0%   { opacity: 0.2; transform: translateX(-6px); }
-          50%  { opacity: 1;   transform: translateX(4px); }
-          100% { opacity: 0.2; transform: translateX(-6px); }
+        @keyframes flowDot {
+          0%   { opacity: 0.15; transform: translateX(-6px); }
+          50%  { opacity: 1;    transform: translateX(0px);  }
+          100% { opacity: 0.15; transform: translateX(6px);  }
         }
-        @keyframes arrowFlow2 {
-          0%   { opacity: 0.08; transform: translateX(-6px); }
-          50%  { opacity: 0.45; transform: translateX(4px); }
-          100% { opacity: 0.08; transform: translateX(-6px); }
-        }
-        @keyframes labelPulse {
-          0%, 100% { opacity: 0.6; letter-spacing: 3px; }
-          50%       { opacity: 1;   letter-spacing: 4px; }
+        @keyframes flowDot2 {
+          0%   { opacity: 0.15; transform: translateX(-6px); }
+          50%  { opacity: 1;    transform: translateX(0px);  }
+          100% { opacity: 0.15; transform: translateX(6px);  }
         }
       `}</style>
 
@@ -722,28 +679,10 @@ export default function App() {
               <textarea rows={5} value={csvText} onChange={e => setCsvText(e.target.value)} style={{ ...S.inp, marginBottom: 8 }}
                 placeholder={'Exportify CSV format:\nSpotify ID,Artist(s),Track Name,...\n\nor simple format:\nArtist Name - Track Title'} />
               {csvError && <div style={{ color: '#ff6b6b', fontSize: 11, marginBottom: 8 }}>{csvError}</div>}
-              {importMsg && (
-                <div style={{ color: artProgress ? '#ffd93d' : '#6bcb77', fontSize: 11, marginBottom: 8 }}>
-                  {importMsg}
-                  {artProgress && (
-                    <div style={{ marginTop: 6 }}>
-                      <div style={{ height: 4, background: '#16151f', borderRadius: 2, overflow: 'hidden' }}>
-                        <div style={{
-                          height: '100%', borderRadius: 2, background: '#ffd93d',
-                          width: `${Math.round((artProgress.done / artProgress.total) * 100)}%`,
-                          transition: 'width .3s ease',
-                        }} />
-                      </div>
-                      <div style={{ fontSize: 9, color: '#555', marginTop: 3, letterSpacing: 1 }}>
-                        {artProgress.done}/{artProgress.total} TRACKS
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
+              {importMsg && <div style={{ color: '#6bcb77', fontSize: 11, marginBottom: 8 }}>{importMsg}</div>}
               <button onClick={handleImport} disabled={!csvText.trim() || importing}
                 style={{ ...S.btn('#6bcb77', '#000'), width: '100%', opacity: csvText.trim() && !importing ? 1 : 0.35 }}>
-                {importing ? (artProgress ? 'FETCHING ART...' : 'IMPORTING...') : 'IMPORT & UPDATE'}
+                {importing ? 'IMPORTING...' : 'IMPORT & UPDATE'}
               </button>
             </div>
           )}
@@ -782,16 +721,21 @@ export default function App() {
                     }
                   </div>
                   {/* Arrow */}
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1, minWidth: 0 }}>
-                    <div style={{
-                      fontSize: 8, color: '#6bcb77cc', letterSpacing: 3, marginBottom: 5,
-                      fontWeight: 700, textTransform: 'uppercase',
-                      animation: 'labelPulse 2.8s ease-in-out infinite',
-                    }}>TRANSITION</div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      <span style={{ fontSize: 14, color: '#6bcb77', animation: 'arrowFlow2 1.8s ease-in-out infinite', animationDelay: '0s',   display: 'inline-block' }}>›</span>
-                      <span style={{ fontSize: 14, color: '#6bcb77', animation: 'arrowFlow  1.8s ease-in-out infinite', animationDelay: '0.2s', display: 'inline-block' }}>›</span>
-                      <span style={{ fontSize: 14, color: '#6bcb77', animation: 'arrowFlow2 1.8s ease-in-out infinite', animationDelay: '0.4s', display: 'inline-block' }}>›</span>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1, minWidth: 0, gap: 5 }}>
+                    <div style={{ fontSize: 9, letterSpacing: 3, color: '#9490aa', fontWeight: 700 }}>TRANSITION</div>
+                    {/* Animated flowing dots */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+                      {[0, 1, 2, 3, 4].map(i => (
+                        <div key={i} style={{
+                          width: i === 4 ? 0 : 5,
+                          height: i === 4 ? 0 : 5,
+                          borderRadius: '50%',
+                          background: '#6bcb77',
+                          animation: `flowDot ${0.9 + i * 0.05}s ease-in-out ${i * 0.18}s infinite`,
+                          opacity: 0.2,
+                        }} />
+                      ))}
+                      <div style={{ color: '#6bcb77', fontSize: 14, marginLeft: 2, lineHeight: 1 }}>›</div>
                     </div>
                   </div>
                   {/* TO art */}

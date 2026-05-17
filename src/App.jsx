@@ -157,108 +157,142 @@ function ExpandingRater({ myVote, onVote }) {
   const containerRef = useRef(null)
   const active = myVote ? getRating(myVote) : null
 
-  // Close panel when clicking outside
+  // Close on outside click
   useEffect(() => {
     if (!open) return
-    const handleClickOutside = (e) => {
-      if (containerRef.current && !containerRef.current.contains(e.target)) {
-        setOpen(false)
-      }
+    const onOutside = (e) => {
+      if (containerRef.current && !containerRef.current.contains(e.target)) setOpen(false)
     }
-    document.addEventListener('mousedown', handleClickOutside)
-    document.addEventListener('touchstart', handleClickOutside)
+    document.addEventListener('mousedown', onOutside)
+    document.addEventListener('touchstart', onOutside)
     return () => {
-      document.removeEventListener('mousedown', handleClickOutside)
-      document.removeEventListener('touchstart', handleClickOutside)
+      document.removeEventListener('mousedown', onOutside)
+      document.removeEventListener('touchstart', onOutside)
     }
   }, [open])
 
-  const handlePick = (rv) => {
-    // Tap active vote → unvote (pass null). Tap different → switch vote.
-    const newKey = myVote === rv.key ? null : rv.key
-    onVote(newKey)
-    // Keep panel open so user can see the change or unvote again
-    // Close only if they just cleared their vote
-    if (newKey === null) setOpen(false)
+  const handlePick = (key) => {
+    // Only called for non-active buttons — always a fresh vote
+    onVote(key)
+    setOpen(false)
+  }
+
+  const handleRemove = (e) => {
+    // Dedicated remove handler — stops propagation so it never reaches the vote button
+    e.stopPropagation()
+    onVote(null)
+    setOpen(false)
   }
 
   return (
     <div ref={containerRef} style={{ position: 'relative', flexShrink: 0 }}>
-      {/* Main trigger button */}
+
+      {/* ── Trigger button ── */}
       <button
         onClick={() => setOpen(o => !o)}
-        title={active ? `Your vote: ${active.label} — tap to change or remove` : 'Tap to rate'}
+        title={active ? `Your vote: ${active.label} — tap to change` : 'Tap to rate'}
         style={{
-          width: 40, height: 40, borderRadius: '50%', border: 'none', cursor: 'pointer',
-          background: active ? (active.isRainbow ? RAINBOW : active.color) : '#18181f',
+          width: 42, height: 42, borderRadius: '50%', border: 'none', cursor: 'pointer',
+          background: active ? (active.isRainbow ? RAINBOW : active.color) : '#1e1c2a',
           boxShadow: active
-            ? (active.isRainbow ? '0 0 18px 6px #c77dff44' : `0 0 16px 5px ${active.color}55`)
-            : 'inset 0 2px 6px #00000099',
+            ? (active.isRainbow ? '0 0 20px 6px #c77dff44' : `0 0 18px 6px ${active.color}66`)
+            : 'inset 0 2px 8px #00000099, 0 0 0 1px #2a2838',
           transition: 'all 0.2s cubic-bezier(.4,2,.5,1)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: active ? 16 : 18,
-          transform: open ? 'scale(1.1)' : 'scale(1)',
+          transform: open ? 'scale(1.08)' : 'scale(1)',
         }}
       >
-        {active ? '' : <span style={{ opacity: 0.3, fontSize: 16 }}>☆</span>}
+        {active
+          ? <span style={{ fontSize: 17 }}>{active.emoji}</span>
+          : <span style={{ opacity: 0.4, fontSize: 18 }}>☆</span>
+        }
       </button>
 
-      {/* Expanded options */}
+      {/* ── Expanded panel ── */}
       {open && (
         <div style={{
-          position: 'absolute', bottom: 48, left: '50%', transform: 'translateX(-50%)',
-          display: 'flex', flexDirection: 'column', gap: 7, alignItems: 'center',
-          zIndex: 50, padding: '10px 8px', background: '#0c0b14',
-          borderRadius: 14, border: '1px solid #2a2838',
-          boxShadow: '0 8px 32px #000c',
+          position: 'absolute', bottom: 52, left: '50%', transform: 'translateX(-50%)',
+          display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'stretch',
+          zIndex: 100,
+          background: '#13111e',
+          borderRadius: 16,
+          border: '1px solid #3a3560',
+          boxShadow: '0 12px 48px #000000cc, 0 0 0 1px #ffffff08',
+          padding: '8px 6px',
+          minWidth: 110,
           animation: 'fanIn .15s ease-out',
         }}>
+
+          {/* Header */}
+          <div style={{ fontSize: 8, letterSpacing: 3, color: '#6560a0', textAlign: 'center', padding: '0 4px 6px', borderBottom: '1px solid #22203a' }}>
+            RATE THIS MIX
+          </div>
+
+          {/* Rating rows */}
           {RATINGS.map(rv => {
             const isActive = myVote === rv.key
             return (
-              <div key={rv.key} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+              <div key={rv.key} style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                padding: '5px 8px', borderRadius: 10, cursor: 'pointer',
+                background: isActive ? (rv.isRainbow ? 'rgba(199,125,255,0.12)' : `${rv.color}18`) : 'transparent',
+                border: isActive ? `1px solid ${rv.isRainbow ? '#c77dff44' : rv.color + '44'}` : '1px solid transparent',
+                transition: 'all 0.15s ease',
+              }}>
+                {/* Vote button — only fires for non-active */}
                 <button
-                  onClick={() => handlePick(rv)}
-                  title={isActive ? `Remove vote: ${rv.label}` : rv.label}
+                  onClick={() => !isActive && handlePick(rv.key)}
                   style={{
-                    width: 34, height: 34, borderRadius: '50%', border: 'none', cursor: 'pointer',
-                    background: isActive ? (rv.isRainbow ? RAINBOW : rv.color) : '#18181f',
+                    width: 30, height: 30, borderRadius: '50%', border: 'none',
+                    cursor: isActive ? 'default' : 'pointer',
+                    background: isActive ? (rv.isRainbow ? RAINBOW : rv.color) : '#1e1c2a',
                     boxShadow: isActive
-                      ? (rv.isRainbow ? '0 0 14px 4px #c77dff44' : `0 0 12px 4px ${rv.color}55`)
-                      : 'inset 0 2px 5px #00000088',
-                    transition: 'all 0.15s ease',
+                      ? (rv.isRainbow ? '0 0 10px 3px #c77dff55' : `0 0 10px 3px ${rv.color}55`)
+                      : 'inset 0 2px 4px #00000088',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                     fontSize: 14, flexShrink: 0,
-                    transform: isActive ? 'scale(1.15)' : 'scale(1)',
-                    position: 'relative',
+                    transition: 'all 0.15s ease',
                   }}
                 >
-                  {!isActive && <span style={{ opacity: 0.35, fontSize: 13 }}>{rv.emoji}</span>}
-                  {/* ✕ overlay on active vote to signal it can be removed */}
-                  {isActive && (
-                    <span style={{
-                      position: 'absolute', top: -4, right: -4,
-                      width: 14, height: 14, borderRadius: '50%',
-                      background: '#1a1825', border: '1px solid #3a3850',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      fontSize: 8, color: '#9490aa', lineHeight: 1,
-                    }}>✕</span>
-                  )}
+                  <span style={{ opacity: isActive ? 1 : 0.5 }}>{rv.emoji}</span>
                 </button>
-                {/* Label below each button */}
-                <div style={{
-                  fontSize: 7, letterSpacing: 1,
-                  color: isActive ? (rv.isRainbow ? '#c77dff' : rv.color) : '#3a3850',
-                  fontWeight: isActive ? 700 : 400,
+
+                {/* Label */}
+                <span style={{
+                  flex: 1,
+                  fontSize: 11, fontWeight: isActive ? 700 : 400,
+                  color: isActive ? (rv.isRainbow ? '#d4a8ff' : rv.color) : '#7870a8',
+                  letterSpacing: 0.5,
                 }}>
-                  {rv.label.toUpperCase()}
-                </div>
+                  {rv.label}
+                </span>
+
+                {/* Remove button — completely separate from vote button */}
+                {isActive && (
+                  <button
+                    onClick={handleRemove}
+                    title="Remove your vote"
+                    style={{
+                      width: 20, height: 20, borderRadius: '50%',
+                      background: '#2a2840', border: '1px solid #4a4870',
+                      color: '#9490aa', fontSize: 10, cursor: 'pointer',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      flexShrink: 0, lineHeight: 1,
+                      transition: 'background 0.15s, color 0.15s',
+                    }}
+                    onMouseEnter={e => { e.currentTarget.style.background = '#ff6b6b33'; e.currentTarget.style.color = '#ff6b6b' }}
+                    onMouseLeave={e => { e.currentTarget.style.background = '#2a2840'; e.currentTarget.style.color = '#9490aa' }}
+                  >
+                    ✕
+                  </button>
+                )}
               </div>
             )
           })}
-          {/* Footer hint */}
-          <div style={{ fontSize: 7, color: '#2a2838', marginTop: 2, letterSpacing: 1 }}>
-            {myVote ? 'TAP ✕ TO REMOVE' : 'TAP TO VOTE'}
+
+          {/* Footer */}
+          <div style={{ fontSize: 8, letterSpacing: 2, color: '#3a3560', textAlign: 'center', padding: '6px 4px 2px', borderTop: '1px solid #22203a' }}>
+            {myVote ? 'TAP ✕ TO REMOVE VOTE' : 'TAP A RATING ABOVE'}
           </div>
         </div>
       )}

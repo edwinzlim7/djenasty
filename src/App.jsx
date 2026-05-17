@@ -1143,9 +1143,7 @@ export default function App() {
                     value={editNoteDraft}
                     onChange={e => setEditNoteDraft(e.target.value)}
                     style={{ ...S.inp }}
-                    placeholder={'One change per line:
-– Added Bicep track after the intro
-– Swapped tracks 6 & 7'}
+                    placeholder={'One change per line:\n– Added Bicep track after the intro\n– Swapped tracks 6 & 7'}
                     autoFocus
                   />
                 ) : (

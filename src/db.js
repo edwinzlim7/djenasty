@@ -5,9 +5,6 @@
 import { supabase } from './supabase.js'
 
 // ─── Playlist ──────────────────────────────────────────────────────────────
-// The playlist table always has exactly ONE row with id = 'main'.
-// We store: tracks (jsonb array), version (int), new_track_ids (jsonb array of id strings)
-
 export async function getPlaylist() {
   const { data, error } = await supabase
     .from('playlist')
@@ -19,31 +16,21 @@ export async function getPlaylist() {
 }
 
 export async function savePlaylist(tracks, version, newTrackIds = []) {
-  // Use upsert so it works whether the row exists or not.
-  // ignoreDuplicates: false means it WILL update on conflict.
   const { error } = await supabase
     .from('playlist')
     .upsert(
-      {
-        id: 'main',
-        tracks,
-        version,
-        new_track_ids: newTrackIds,
-        updated_at: new Date().toISOString(),
-      },
+      { id: 'main', tracks, version, new_track_ids: newTrackIds, updated_at: new Date().toISOString() },
       { onConflict: 'id' }
     )
   if (error) { console.error('savePlaylist error:', error.message); throw error }
 }
 
 // ─── Ratings ───────────────────────────────────────────────────────────────
-
 export async function getAllRatings() {
   const { data, error } = await supabase
     .from('ratings')
     .select('transition_key, user_name, rating')
   if (error) { console.error('getAllRatings error:', error.message); return {} }
-  // Reshape into { [transition_key]: { [user_name]: rating } }
   const map = {}
   for (const row of data || []) {
     if (!map[row.transition_key]) map[row.transition_key] = {}
@@ -56,28 +43,25 @@ export async function upsertRating(transitionKey, userName, rating) {
   const { error } = await supabase
     .from('ratings')
     .upsert(
-      {
-        transition_key: transitionKey,
-        user_name: userName,
-        rating,
-        updated_at: new Date().toISOString(),
-      },
+      { transition_key: transitionKey, user_name: userName, rating, updated_at: new Date().toISOString() },
       { onConflict: 'transition_key,user_name' }
     )
   if (error) { console.error('upsertRating error:', error.message); throw error }
 }
 
 export async function deleteRating(transitionKey, userName) {
-  const { error } = await supabase
+  // .select() asks Supabase to return the deleted row — confirms the delete actually ran
+  const { data, error } = await supabase
     .from('ratings')
     .delete()
     .eq('transition_key', transitionKey)
     .eq('user_name', userName)
+    .select()
   if (error) { console.error('deleteRating error:', error.message); throw error }
+  return data
 }
 
 export async function deleteAllRatings() {
-  // Supabase requires a filter on delete — we use a always-true filter
   const { error } = await supabase
     .from('ratings')
     .delete()
@@ -86,13 +70,11 @@ export async function deleteAllRatings() {
 }
 
 // ─── Rating History ────────────────────────────────────────────────────────
-
 export async function getRatingHistory() {
   const { data, error } = await supabase
     .from('rating_history')
     .select('*')
   if (error) { console.error('getRatingHistory error:', error.message); return {} }
-  // Reshape: { [transition_key]: { 'v1': {green,yellow,red,rainbow}, ... } }
   const map = {}
   for (const row of data || []) {
     if (!map[row.transition_key]) map[row.transition_key] = {}
@@ -111,17 +93,9 @@ export async function saveHistorySnapshot(ratingsMap, version) {
   for (const [key, votes] of Object.entries(ratingsMap)) {
     const c = { green: 0, yellow: 0, red: 0, rainbow: 0 }
     Object.values(votes).forEach(v => { if (c[v] !== undefined) c[v]++ })
-    // Only save if there were actual votes
     const total = c.green + c.yellow + c.red + c.rainbow
     if (total === 0) continue
-    rows.push({
-      transition_key: key,
-      version,
-      green_count:   c.green,
-      yellow_count:  c.yellow,
-      red_count:     c.red,
-      rainbow_count: c.rainbow,
-    })
+    rows.push({ transition_key: key, version, green_count: c.green, yellow_count: c.yellow, red_count: c.red, rainbow_count: c.rainbow })
   }
   if (!rows.length) return
   const { error } = await supabase
@@ -131,7 +105,6 @@ export async function saveHistorySnapshot(ratingsMap, version) {
 }
 
 // ─── Patch Notes ───────────────────────────────────────────────────────────
-
 export async function getPatchNotes() {
   const { data, error } = await supabase
     .from('patch_notes')
@@ -157,7 +130,6 @@ export async function deletePatchNote(id) {
 }
 
 // ─── Roadmap ───────────────────────────────────────────────────────────────
-
 export async function getRoadmap() {
   const { data, error } = await supabase
     .from('roadmap')
@@ -192,16 +164,26 @@ export async function deleteRoadmapItem(id) {
 }
 
 // ─── Realtime ─────────────────────────────────────────────────────────────
-
-export function subscribeToRatings({ onInsert, onUpdate, onDelete }) {
+// IMPORTANT: DELETE events only carry full row data if you have run:
+//   ALTER TABLE ratings REPLICA IDENTITY FULL;
+// in your Supabase SQL editor. Without it, payload.old only has {id: X}
+// and the onRefreshNeeded fallback fires instead to reload all ratings.
+export function subscribeToRatings({ onInsert, onUpdate, onDelete, onRefreshNeeded }) {
   const channel = supabase
     .channel('ratings-live')
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'ratings' },
       (payload) => onInsert?.(payload.new))
     .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'ratings' },
       (payload) => onUpdate?.(payload.new))
-    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'ratings' },
-      (payload) => onDelete?.(payload.old))
+    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'ratings' }, (payload) => {
+      if (payload.old?.transition_key && payload.old?.user_name) {
+        // Full row data available (REPLICA IDENTITY FULL is set) — update surgically
+        onDelete?.(payload.old)
+      } else {
+        // Partial payload — reload everything from DB to stay in sync
+        onRefreshNeeded?.()
+      }
+    })
     .subscribe()
   return () => supabase.removeChannel(channel)
 }

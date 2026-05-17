@@ -418,10 +418,16 @@ export default function App() {
         [row.transition_key]: { ...(prev[row.transition_key] || {}), [row.user_name]: row.rating },
       })),
       onDelete: row => setRatings(prev => {
+        // Only called when REPLICA IDENTITY FULL is set and full row data is available
         const block = { ...(prev[row.transition_key] || {}) }
         delete block[row.user_name]
         return { ...prev, [row.transition_key]: block }
       }),
+      onRefreshNeeded: async () => {
+        // Fallback when DELETE payload doesn't include row data — reload from DB
+        const fresh = await getAllRatings()
+        setRatings(fresh)
+      },
     })
 
     // Also listen for playlist changes (e.g. DJ updates on another device)
@@ -462,17 +468,31 @@ export default function App() {
     if (!userName) { setNameModal(true); return }
     const key = tKey(idx)
     const current = (ratings[key] || {})[userName]
+    const isRemove = voteKey === null || current === voteKey
+
+    // Optimistically update local state immediately so UI feels instant
+    setRatings(prev => {
+      const block = { ...(prev[key] || {}) }
+      if (isRemove) {
+        delete block[userName]
+      } else {
+        block[userName] = voteKey
+      }
+      return { ...prev, [key]: block }
+    })
+
     try {
-      // voteKey === null means explicit unvote (X button tapped)
-      // voteKey === current means toggling off same vote
-      if (voteKey === null || current === voteKey) {
+      if (isRemove) {
         await deleteRating(key, userName)
       } else {
         await upsertRating(key, userName, voteKey)
       }
-      // Realtime subscription updates state automatically
+      // Realtime will also fire and keep other users in sync
     } catch (err) {
       console.error('Vote failed:', err)
+      // Revert optimistic update on error by reloading from DB
+      const fresh = await getAllRatings()
+      setRatings(fresh)
     }
   }
 

@@ -438,8 +438,9 @@ export default function App() {
   const [bootError, setBootError]     = useState('')
   const [tab, setTab]                 = useState('RATE')
   const [tracks, setTracks]           = useState([])
-  const [currentVersion, setVersion]  = useState(1)
-  const [newTrackIds, setNewTrackIds] = useState(new Set())
+  const [currentVersion, setVersion]      = useState(1)
+  const [lastUpdatedAt, setLastUpdatedAt] = useState(null)
+  const [newTrackIds, setNewTrackIds]     = useState(new Set())
   const [ratings, setRatings]         = useState({})
   const [ratingHistory, setHistory]   = useState({})
   const [patchNotes, setPatchNotes]   = useState([])
@@ -491,6 +492,7 @@ export default function App() {
         if (pl) {
           setTracks(pl.tracks || [])
           setVersion(pl.version || 1)
+          setLastUpdatedAt(pl.updated_at || null)
           // Restore new_track_ids from DB so NEW badges survive refresh
           setNewTrackIds(new Set(pl.new_track_ids || []))
         }
@@ -538,6 +540,7 @@ export default function App() {
         if (pl) {
           setTracks(pl.tracks || [])
           setVersion(pl.version || 1)
+          setLastUpdatedAt(pl.updated_at || null)
           setNewTrackIds(new Set(pl.new_track_ids || []))
         }
       },

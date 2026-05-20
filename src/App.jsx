@@ -439,6 +439,7 @@ export default function App() {
   const [tab, setTab]                 = useState('RATE')
   const [tracks, setTracks]           = useState([])
   const [currentVersion, setVersion]  = useState(1)
+  const [lastUpdatedAt, setLastUpdatedAt] = useState(null) // ISO string from DB — used for 2-week NEW expiry
   const [newTrackIds, setNewTrackIds] = useState(new Set())
   const [ratings, setRatings]         = useState({})
   const [ratingHistory, setHistory]   = useState({})
@@ -491,6 +492,7 @@ export default function App() {
         if (pl) {
           setTracks(pl.tracks || [])
           setVersion(pl.version || 1)
+          setLastUpdatedAt(pl.updated_at || null)
           // Restore new_track_ids from DB so NEW badges survive refresh
           setNewTrackIds(new Set(pl.new_track_ids || []))
         }
@@ -538,6 +540,7 @@ export default function App() {
         if (pl) {
           setTracks(pl.tracks || [])
           setVersion(pl.version || 1)
+          setLastUpdatedAt(pl.updated_at || null)
           setNewTrackIds(new Set(pl.new_track_ids || []))
         }
       },
@@ -578,13 +581,35 @@ export default function App() {
   // ── Helpers ───────────────────────────────────────────────────────────────
   const tKey = (i) => `${tracks[i]?.id}|||${tracks[i + 1]?.id}`
 
+  const NEW_BADGE_MS = 14 * 24 * 60 * 60 * 1000 // 2 weeks in ms
+
   const transitions = tracks.slice(0, -1).map((_, i) => {
     const key = tKey(i)
+    const fromTrack = tracks[i]
+    const toTrack   = tracks[i + 1]
+
+    // A transition is NEW only when BOTH its tracks were added in the same
+    // (most recent) import — i.e. the transition itself is genuinely new.
+    // A track added at one end of an existing transition doesn't make the
+    // whole transition new; it just creates a new transition on its other side.
+    const latestVersion = currentVersion
+    const fromIsNew = fromTrack?.addedIn === latestVersion
+    const toIsNew   = toTrack?.addedIn   === latestVersion
+
+    // The transition is new if either track was just added in this version...
+    // but only if that track is truly the "new" side (addedIn matches current version).
+    // We also enforce the 2-week expiry using the playlist's last updated_at timestamp.
+    const withinTwoWeeks = lastUpdatedAt
+      ? (Date.now() - new Date(lastUpdatedAt).getTime()) < NEW_BADGE_MS
+      : true
+
+    const isNew = withinTwoWeeks && (fromIsNew || toIsNew)
+
     return {
-      index: i, from: tracks[i], to: tracks[i + 1], key,
+      index: i, from: fromTrack, to: toTrack, key,
       allRatings: ratings[key] || {},
       myVote: userName ? (ratings[key] || {})[userName] || null : null,
-      isNew: newTrackIds.has(tracks[i]?.id) || newTrackIds.has(tracks[i + 1]?.id),
+      isNew,
       history: ratingHistory[key] || {},
     }
   })
@@ -688,6 +713,7 @@ export default function App() {
       setTracks(newTracks)
       setNewTrackIds(new Set(addedIds))
       setVersion(newVersion)
+      setLastUpdatedAt(new Date().toISOString())
       setHistory(await getRatingHistory())
 
       setCsvText('')

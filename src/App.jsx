@@ -439,7 +439,6 @@ export default function App() {
   const [tab, setTab]                 = useState('RATE')
   const [tracks, setTracks]           = useState([])
   const [currentVersion, setVersion]  = useState(1)
-  const [lastUpdatedAt, setLastUpdatedAt] = useState(null) // ISO string from DB — used for 2-week NEW expiry
   const [newTrackIds, setNewTrackIds] = useState(new Set())
   const [ratings, setRatings]         = useState({})
   const [ratingHistory, setHistory]   = useState({})
@@ -492,7 +491,6 @@ export default function App() {
         if (pl) {
           setTracks(pl.tracks || [])
           setVersion(pl.version || 1)
-          setLastUpdatedAt(pl.updated_at || null)
           // Restore new_track_ids from DB so NEW badges survive refresh
           setNewTrackIds(new Set(pl.new_track_ids || []))
         }
@@ -540,7 +538,6 @@ export default function App() {
         if (pl) {
           setTracks(pl.tracks || [])
           setVersion(pl.version || 1)
-          setLastUpdatedAt(pl.updated_at || null)
           setNewTrackIds(new Set(pl.new_track_ids || []))
         }
       },
@@ -581,35 +578,13 @@ export default function App() {
   // ── Helpers ───────────────────────────────────────────────────────────────
   const tKey = (i) => `${tracks[i]?.id}|||${tracks[i + 1]?.id}`
 
-  const NEW_BADGE_MS = 14 * 24 * 60 * 60 * 1000 // 2 weeks in ms
-
   const transitions = tracks.slice(0, -1).map((_, i) => {
     const key = tKey(i)
-    const fromTrack = tracks[i]
-    const toTrack   = tracks[i + 1]
-
-    // A transition is NEW only when BOTH its tracks were added in the same
-    // (most recent) import — i.e. the transition itself is genuinely new.
-    // A track added at one end of an existing transition doesn't make the
-    // whole transition new; it just creates a new transition on its other side.
-    const latestVersion = currentVersion
-    const fromIsNew = fromTrack?.addedIn === latestVersion
-    const toIsNew   = toTrack?.addedIn   === latestVersion
-
-    // The transition is new if either track was just added in this version...
-    // but only if that track is truly the "new" side (addedIn matches current version).
-    // We also enforce the 2-week expiry using the playlist's last updated_at timestamp.
-    const withinTwoWeeks = lastUpdatedAt
-      ? (Date.now() - new Date(lastUpdatedAt).getTime()) < NEW_BADGE_MS
-      : true
-
-    const isNew = withinTwoWeeks && (fromIsNew || toIsNew)
-
     return {
-      index: i, from: fromTrack, to: toTrack, key,
+      index: i, from: tracks[i], to: tracks[i + 1], key,
       allRatings: ratings[key] || {},
       myVote: userName ? (ratings[key] || {})[userName] || null : null,
-      isNew,
+      isNew: newTrackIds.has(tracks[i]?.id) || newTrackIds.has(tracks[i + 1]?.id),
       history: ratingHistory[key] || {},
     }
   })
@@ -685,6 +660,28 @@ export default function App() {
   }
 
   // ── CSV Import ────────────────────────────────────────────────────────────
+  // Normalise a string for fuzzy comparison — lowercase, strip punctuation/spaces
+  const normalise = s => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '')
+
+  // Find the best matching existing track for a parsed track.
+  // Returns the existing track if title+artist are close enough, otherwise null.
+  // This protects comments and ratings when Exportify slightly changes formatting.
+  const findExistingTrack = (parsed, existingTracks) => {
+    const pTitle  = normalise(parsed.title)
+    const pArtist = normalise(parsed.artist)
+    // Exact normalised match first
+    const exact = existingTracks.find(t =>
+      normalise(t.title) === pTitle && normalise(t.artist) === pArtist
+    )
+    if (exact) return exact
+    // Title-only match as fallback (catches artist formatting differences)
+    if (pTitle.length > 3) {
+      const titleOnly = existingTracks.find(t => normalise(t.title) === pTitle)
+      if (titleOnly) return titleOnly
+    }
+    return null
+  }
+
   const handleImport = async () => {
     setCsvError(''); setImportMsg(''); setImporting(true)
     try {
@@ -692,21 +689,34 @@ export default function App() {
       if (parsed.length < 2) { setCsvError('Need at least 2 tracks. Check format.'); setImporting(false); return }
 
       const oldIds = new Set(tracks.map(t => t.id))
-      const addedIds = parsed.map(t => t.id).filter(id => !oldIds.has(id))
       const newVersion = currentVersion + 1
 
       // 1. Snapshot current ratings into history BEFORE changing anything
       await saveHistorySnapshot(ratings, currentVersion)
 
-      // 2. Build new tracks array, preserving addedIn version for existing tracks
-      const newTracks = parsed.map(t => ({
-        ...t,
-        albumArt: t.albumArt || tracks.find(o => o.id === t.id)?.albumArt || '',
-        addedIn: addedIds.includes(t.id) ? newVersion : (tracks.find(o => o.id === t.id)?.addedIn || 1),
-      }))
+      // 2. Build new tracks, preserving the original id wherever a fuzzy match exists.
+      // This keeps transition_key stable even if Exportify slightly changes formatting,
+      // which means all comments and ratings under the old key remain attached.
+      const newTracks = parsed.map(t => {
+        const match = findExistingTrack(t, tracks)
+        if (match) {
+          // Reuse the existing track's id — preserves all comments + ratings
+          return {
+            ...t,
+            id: match.id,
+            albumArt: t.albumArt || match.albumArt || '',
+            addedIn: match.addedIn || 1,
+          }
+        }
+        // Genuinely new track — keep parsed id
+        return { ...t, albumArt: t.albumArt || '', addedIn: newVersion }
+      })
+
+      const addedIds = newTracks
+        .filter(t => !oldIds.has(t.id))
+        .map(t => t.id)
 
       // 3. Persist playlist WITH new_track_ids to Supabase
-      //    This is the key fix: new_track_ids is saved to DB, not just memory
       await savePlaylist(newTracks, newVersion, addedIds)
 
       // 4. Update local state
@@ -717,7 +727,7 @@ export default function App() {
       setHistory(await getRatingHistory())
 
       setCsvText('')
-      setImportMsg(`✓ ${parsed.length} tracks · ${addedIds.length} new · now at v${newVersion}`)
+      setImportMsg(`✓ ${newTracks.length} tracks · ${addedIds.length} new · now at v${newVersion}`)
       setTimeout(() => setImportMsg(''), 8000)
     } catch (err) {
       setCsvError(`Import failed: ${err.message}`)
